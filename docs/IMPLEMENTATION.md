@@ -360,25 +360,137 @@ starts.
 
 ## Step 3: the pane
 
-- ratatui 0.30, using its `ratatui::crossterm` re-export.
-- Threads: one reads crossterm events, one runs the watcher. Both send
-  `AppEvent` into one channel, and the main loop redraws after each event.
-- `App` state: the index, list mode, list selection, the open note,
-  history with a cursor, detail scroll, and the selected link. The open note
-  and history are rel paths, since `FileId`s change on refresh. When the
-  open note is deleted, the detail panel says so and the history skips it.
-- `render.rs` turns pulldown events into `Vec<Line>` for a given width and
-  records a `LinkHit { line, cols, link }` for every link, which `n`, `N`,
-  and `enter` use. Cache the result by (note, width).
-- The header line shows the root name, the mode, and the `send_allow`
-  prefixes, or `send off`.
-- Root at start: `KNAPP_CWD`, else `workspace_cwd` from
-  `HERDR_PLUGIN_CONTEXT_JSON`, else the current directory, matched against
-  the configured roots as the plan says.
-- Add the `notes` `[[panes]]` entry to `herdr-plugin.toml`, and open it with
-  `herdr plugin pane open --plugin shindakun.knapp --entrypoint notes`.
-- Tests: render snapshots from `ratatui::backend::TestBackend` for a fixture
-  note at 80 columns, and key sequences that follow a link and go back.
+Dependency for this step: `ratatui` 0.30 with default features off and
+`crossterm`, `layout-cache`, and `underline-color` on. Use its
+`ratatui::crossterm` re-export; there is no direct `crossterm` dependency.
+
+### Layout of the code
+
+- `src/render.rs`: note text to styled lines. Pure, no terminal.
+- `src/tui/app.rs`: `App` state and key handling. No terminal.
+- `src/tui/ui.rs`: drawing `App` into a ratatui `Frame`.
+- `src/tui/mod.rs`: `run()`: terminal setup, the event loop, threads.
+- `knapp pane [--root NAME|PATH]` calls `tui::run`.
+
+### Start and shutdown
+
+- `ratatui::init()` sets up the terminal and installs a panic hook that
+  restores it; `ratatui::restore()` on the way out. Mouse capture is on while
+  running and off before restore.
+- Root: `--root`, else `KNAPP_CWD`, else `workspace_cwd` from
+  `HERDR_PLUGIN_CONTEXT_JSON` (a pane launched by `plugin pane open` gets
+  the context of its workspace; see herdr `src/app/api/plugins/panes.rs`),
+  else the current directory, then `Config::pick_root`.
+- Load with the cache and write it when stale; write it again on quit. A
+  root that fails to load shows the error in the pane; `q` still quits.
+- The pane's cwd is the plugin root, never the notes root.
+
+### Event loop
+
+- One thread reads crossterm events, one forwards watcher batches. Both send
+  `AppEvent::{Key, Mouse, Resize, Batch}` into one channel. The main loop
+  blocks on it, applies the event to `App`, and redraws.
+- On `Batch`, `Index::refresh`; on `Some(change)`, drop render caches for
+  the changed paths and keep the open note, selection, and history by rel
+  path. An open note that was removed shows `deleted: <path>` in the detail
+  panel; history skips removed entries.
+
+### App state
+
+```rust
+pub struct App {
+    index: Index,
+    mode: Mode,                      // Tree, Backlinks, Forward in this step
+    focus: Focus,                    // List or Detail
+    list: ListState,                 // selected row, offset
+    expanded: BTreeSet<String>,      // open folders in Tree, by rel path
+    open: Option<String>,            // rel path of the note in the detail panel
+    history: Vec<Visit>, cursor: usize, // Visit { rel, scroll }
+    scroll: usize,                   // detail panel, in rendered lines
+    link: Option<usize>,             // selected LinkHit
+    fold_frontmatter: bool,
+    status: Option<String>,          // one-line message at the bottom
+    help: bool,
+}
+```
+
+- `tab` cycles the modes built so far; later steps add theirs.
+- Tree rows: folders (folded by default) and files, sorted by name within a
+  folder. Excluded files are not listed. `enter` on a folder folds or
+  unfolds it; on a file it opens it.
+- Backlinks rows: `source:line` and the trimmed linking line. `enter` opens
+  the source scrolled to that line with that link selected.
+- Forward rows: one per link, with state, as written, and target. `enter`
+  follows it.
+- Opening a note pushes a `Visit`; `[` / `ctrl-o` and `]` move through
+  history, restoring scroll.
+- Following: resolved or ambiguous goes to the target (the pick), scrolled
+  to the heading or block when the fragment was found. Unresolved shows a
+  detail page: `No note named <target>` and the notes that reference it,
+  each followable. An attachment shows its path, kind, and size.
+- Width under 80 columns: `narrow()`; only the focused panel is drawn.
+
+### render.rs
+
+```rust
+pub struct Rendered {
+    pub lines: Vec<Line<'static>>,
+    pub source_line: Vec<u32>,       // parallel to lines
+    pub hits: Vec<LinkHit>,
+}
+pub struct LinkHit { pub line: usize, pub cols: Range<u16>, pub link: usize } // link: index into Parsed::links
+
+pub fn render(text: &str, parsed: &Parsed, states: &[Resolved], width: u16, fold_frontmatter: bool, color: bool) -> Rendered;
+```
+
+- pulldown-cmark with the parse options plus `ENABLE_TASKLISTS` and
+  `ENABLE_STRIKETHROUGH`, over the same text, so link offsets match
+  `Parsed::links`: a rendered link is matched to its `Link` by
+  `span.start`. A link with no match (an external URL) renders as text
+  with its URL, and is not in `hits`.
+- Wrap by display width at spaces; a word longer than the width is broken.
+  Code block lines and table cells are cut with `…`.
+- Headings: bold, with dim `#` markers, blank line before. Lists: `•` and
+  numbers, two spaces per level, `[ ]` / `[x]` for tasks. Quotes: a `│`
+  and a space before each line. A quote whose first line starts `[!type]` is a callout: its first
+  line becomes `▌ Type: title`. Rules: a `─` line. Inline and fenced code:
+  a distinct color, or reverse with `NO_COLOR`.
+- Links: alias, link text, or target; underlined. Resolved in one color,
+  ambiguous in another, unresolved dim. Wiki embeds of notes render as
+  `↳ <target>`; image embeds as `[image: <name>]` until step 7.
+- Frontmatter: folded to `▸ frontmatter (<n> keys)`; unfolded as
+  `key  value` rows. Property links are hits like any other.
+- Comment ranges (`%%...%%`) are not rendered.
+- Cache `Rendered` by (rel, width, fold state), cleared on refresh for
+  changed paths.
+
+### Manifest and a real session
+
+Add the `notes` pane from the plan to `herdr-plugin.toml` in this step.
+The step closes after this runs in Herdr:
+
+1. `cargo build --release`, then `herdr plugin link .` (link does not
+   build).
+2. `herdr plugin pane open --plugin shindakun.knapp --entrypoint notes`
+   from a workspace whose directory holds notes: the pane opens on that
+   root.
+3. Keys from the plan's table, a resize, and the mouse.
+4. Edit a note in another pane: the open note and its backlinks update.
+5. `q`: the terminal is restored and the cache is written.
+
+### Pane tests
+
+- `tests/render.rs`: headings, lists, tasks, quotes, callouts, code, tables,
+  rules, wrapping at 40 columns, wide characters, links styled by state,
+  frontmatter folded and open, `%%comments%%` hidden, and `hits` pointing
+  at the right `Parsed::links` entries on `vault-basic/index.md`.
+- `tests/pane.rs`: drive `App` with key events on `TestBackend` at 100x30
+  and 60x20, and assert rows of the buffer (the helper in `tests/common`
+  skips the blank cell after a wide character): open `index.md` from the
+  tree, follow `[[alpha#Second Section]]` and land on that heading, go back
+  with `[`, follow an unresolved link, open a backlink at its line, fold
+  and unfold a folder, and see a refresh after a file change keep the open
+  note.
 
 ## Step 4: editor, copy, search
 

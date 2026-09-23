@@ -136,7 +136,9 @@ Targets for 5,000 notes: a cold load under 2 seconds, a warm load under
 ## Views
 
 One pane, a list on the left and a detail panel on the right. `tab` cycles
-the left list between modes.
+the left list between modes. Below 80 columns the pane shows one of the two
+at a time, and `h` / `l` switch between them. The pane starts with no note
+open; the detail panel shows the root's counts until one is.
 
 | Mode | Shows |
 |---|---|
@@ -149,21 +151,31 @@ the left list between modes.
 | Recent | by mtime |
 | Search | full text, ripgrep if on `PATH`, else built in |
 
-The detail panel renders the note: headings, lists, code blocks, tables, and
-links styled as links. Frontmatter shows as a small table at the top,
-collapsible. PNG embeds render through pane graphics where available. Other
-image formats, and every image without graphics, show as a placeholder line
-with the file name.
+The detail panel renders the note: headings, lists and task lists, block
+quotes and callouts (`> [!note] Title`), code blocks, tables, and rules.
+Links show their alias or text, styled by state: resolved, ambiguous, or
+unresolved. A note embed (`![[note]]`) is a followable link line, not an
+inline copy. Frontmatter shows as a table at the top, folded to one line
+until `f` opens it. Long lines wrap; code block lines and table cells are
+cut with `…` instead. PNG embeds render through pane graphics where
+available. Other image formats, and every image without graphics, show as a
+placeholder line with the file name.
+
+Following a link to an attachment shows its path, kind, and size. With
+`NO_COLOR` set, states and styles use bold, dim, underline, and reverse
+only.
 
 ## Keys
 
 | Key | Action |
 |---|---|
-| `j` `k`, arrows | move in the focused list |
-| `enter` | open the selected note, or follow the selected link |
+| `j` `k`, arrows | move in the list, or scroll the note |
+| `ctrl-d` `ctrl-u`, `pgdn` `pgup` | half a page down and up |
+| `home` `end` | top and bottom |
+| `enter` | open the selected note, fold or unfold a folder, or follow the selected link |
 | `h` `l` | move focus between list and detail |
-| `n` `N` | next and previous link in the detail panel |
-| `ctrl-o` `ctrl-i` | back and forward in note history |
+| `n` `N` | next and previous link in the note |
+| `[` `]`, `ctrl-o` | back and forward in note history (`ctrl-o` is back) |
 | `tab` `shift-tab` | cycle list mode |
 | `/` | search |
 | `f` | fold or unfold the frontmatter table |
@@ -172,7 +184,12 @@ with the file name.
 | `y` `Y` | copy path, copy `[[wikilink]]` |
 | `s` `S` | send to agent, send with backlinks |
 | `1`..`9` | switch root |
-| `q` | quit |
+| `?` | show the keys |
+| `esc` | close the help or a picker; focus the list |
+| `q`, `ctrl-c` | quit |
+
+`ctrl-i` is not used: terminals send it as `tab`. The mouse wheel scrolls the
+panel under the pointer. A click selects a list row or follows a link.
 
 Following an ambiguous link opens its pick. Following an unresolved link
 shows the target name and the notes that reference it.
