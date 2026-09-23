@@ -8,6 +8,8 @@ fn main() -> ExitCode {
         Some("links") => cli::links(&args[1..]),
         Some("backlinks") => cli::backlinks(&args[1..]),
         Some("unresolved") => cli::unresolved(&args[1..]),
+        Some("orphans") => cli::orphans(&args[1..]),
+        Some("tags") => cli::tags(&args[1..]),
         Some("index") => cli::index(&args[1..]),
         Some("pane") => cli::pane(&args[1..]),
         None | Some("--help" | "-h" | "help") => {

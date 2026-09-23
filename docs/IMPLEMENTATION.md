@@ -315,7 +315,9 @@ starts.
 - `Index::refresh` runs the sweep again, reparses the touched notes plus any
   whose mtime or size changed, drops removed files, and re-resolves
   everything. It returns `None` when nothing changed, else a `Change` with
-  the added, removed, and modified paths.
+  the added, removed, and modified paths. Modified means any change to a
+  file's mtime, size, kind, or exclusion, or a changed parse: a prose-only
+  edit changes no links, but the pane shows the text and Recent the mtime.
 - `FileId`s change on every refresh. Anything held across a refresh (the
   pane's open note, its history) holds rel paths.
 - The pane does not write the cache after each refresh, only after its first
@@ -633,9 +635,12 @@ impl Index {
   `getTags` keeps the most frequent spelling). `notes` on a node are the notes tagged exactly that tag; a node's
   count is the distinct notes in it and every node under it.
 - Move the grouping in `cli::unresolved` into `Index::unresolved`, so the
-  CLI and the Unresolved mode share it: `Target { state, key, shown,
-  sources: Vec<(FileId, u32)>, candidates: Vec<FileId> }`, sorted as the CLI
-  prints.
+  CLI and the Unresolved mode share it: `Target { ambiguous, key, shown,
+  sources: Vec<Source>, candidates: Vec<FileId> }`, sorted as the CLI
+  prints. `Source { file, line, pick }` records where that link goes: an
+  ambiguous name has no single pick, since Obsidian prefers candidates
+  under the linking note's folder. `candidates` are sorted by path.
+  `unresolved --json` gives each source's `goes_to`.
 
 ### Modes (tui/app.rs)
 
@@ -646,8 +651,9 @@ impl Index {
   name. `enter` on a note opens it.
 - Unresolved: `count  target`, marked `✗` or `?`. `enter` opens
   `Page::Unresolved(target)` for an unresolved group and
-  `Page::Ambiguous(target)` for an ambiguous one. The ambiguous page lists
-  the candidates, pick first, then `Referenced from:`, all followable.
+  `Page::Ambiguous(key)` for an ambiguous one. The ambiguous page lists
+  the candidates, then `Referenced from:` with `source:line → target` for
+  each link, all followable.
 - Orphans: paths, sorted. `enter` opens.
 - Recent: every visible note, newest first, as `age  path`. Age is the
   largest whole unit of the time since mtime: `42s`, `5m`, `3h`, `2d`,
@@ -682,8 +688,10 @@ an expected file with no test is an error in `tests/cli.rs`.
   with a note counted once across two child tags, orphans ignoring
   self-links and excluded files.
 - `tests/pane.rs`: tab order, unfolding a tag and opening a note from it,
-  the ambiguous page on `vault-ambiguous`, Recent ordering after touching a
-  file, and the one-mode header at 40 columns.
+  the ambiguous page on `vault-ambiguous` (each source's own pick), Recent
+  ordering after touching a file, the one-mode header at 40 columns, and
+  an open note showing a prose-only edit.
+- `tests/cache.rs`: a prose-only edit is reported as modified.
 - `age()` for each unit boundary.
 
 ### In herdr

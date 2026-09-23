@@ -63,6 +63,49 @@ impl Resolved {
     }
 }
 
+/// A tag and the tags under it. `notes` carry exactly this tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagNode {
+    /// Full tag, lowercased: the tag's identity.
+    pub key: String,
+    /// Full tag in its most used spelling.
+    pub shown: String,
+    pub notes: Vec<FileId>,
+    pub children: Vec<TagNode>,
+    /// Distinct notes carrying this tag or any tag under it.
+    pub count: usize,
+}
+
+impl TagNode {
+    /// The last segment of `shown`.
+    pub fn name(&self) -> &str {
+        basename(&self.shown)
+    }
+}
+
+/// A group of unresolved or ambiguous links with the same target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub ambiguous: bool,
+    /// `key()` of the target, without `.md`.
+    pub key: String,
+    /// The target as first written, in path order.
+    pub shown: String,
+    pub sources: Vec<Source>,
+    /// For ambiguous targets: every candidate, sorted by path. Which one a
+    /// link goes to depends on the linking note's folder; see `Source::pick`.
+    pub candidates: Vec<FileId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    pub file: FileId,
+    pub line: u32,
+    /// Where this link goes: Obsidian's pick for its note. `None` when
+    /// unresolved.
+    pub pick: Option<FileId>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct LoadStats {
     pub reused: usize,
@@ -284,7 +327,9 @@ impl Index {
                     let parsed = needs_parse(&e)
                         .then(|| read_and_parse(&self.root, &e.rel))
                         .flatten();
-                    if parsed != p.parsed || p.excluded != e.excluded || p.kind != e.kind {
+                    // Any change to the file counts, not only one that changes
+                    // links or tags: the pane shows the text, and Recent the mtime.
+                    if !same || parsed != p.parsed {
                         change.modified.push(e.rel.clone());
                     }
                     parsed
@@ -493,6 +538,138 @@ impl Index {
         far.sort_by(by_len);
         near.extend(far);
         near
+    }
+
+    /// The tag tree, sorted by name without regard to case. Tags compare
+    /// without case and show their most used spelling (ties to the first in
+    /// path order), as Obsidian's `getTags` does.
+    pub fn tags(&self) -> Vec<TagNode> {
+        // key -> (spelling -> (occurrences, first seen), notes tagged exactly)
+        type Spellings = HashMap<String, (usize, usize)>;
+        let mut seen: HashMap<String, (Spellings, BTreeSet<FileId>)> = HashMap::new();
+        let mut order = 0;
+        for (id, file) in self.files.iter().enumerate() {
+            if file.excluded {
+                continue;
+            }
+            let Some(parsed) = &file.parsed else {
+                continue;
+            };
+            for tag in &parsed.tags {
+                let name = tag.name.trim_end_matches('/');
+                if name.is_empty() {
+                    continue;
+                }
+                // The tag and each parent, as Obsidian counts them.
+                let mut prefix = name;
+                loop {
+                    let entry = seen.entry(prefix.to_lowercase()).or_default();
+                    let spelling = entry.0.entry(prefix.to_string()).or_insert((0, order));
+                    spelling.0 += 1;
+                    order += 1;
+                    if prefix == name {
+                        entry.1.insert(id);
+                    }
+                    match prefix.rsplit_once('/') {
+                        Some((parent, _)) => prefix = parent,
+                        None => break,
+                    }
+                }
+            }
+        }
+        fn build(
+            parent: Option<&str>,
+            seen: &HashMap<String, (Spellings, BTreeSet<FileId>)>,
+        ) -> Vec<TagNode> {
+            let mut nodes: Vec<TagNode> = seen
+                .iter()
+                .filter(|(k, _)| k.rsplit_once('/').map(|(p, _)| p) == parent)
+                .map(|(k, (spellings, notes))| {
+                    let shown = spellings
+                        .iter()
+                        .max_by(|a, b| a.1 .0.cmp(&b.1 .0).then(b.1 .1.cmp(&a.1 .1)))
+                        .map(|(s, _)| s.clone())
+                        .unwrap_or_else(|| k.clone());
+                    let children = build(Some(k), seen);
+                    let mut all: BTreeSet<FileId> = notes.clone();
+                    fn collect(n: &TagNode, into: &mut BTreeSet<FileId>) {
+                        into.extend(&n.notes);
+                        n.children.iter().for_each(|c| collect(c, into));
+                    }
+                    children.iter().for_each(|c| collect(c, &mut all));
+                    TagNode {
+                        key: k.clone(),
+                        shown,
+                        notes: notes.iter().copied().collect(),
+                        count: all.len(),
+                        children,
+                    }
+                })
+                .collect();
+            nodes.sort_by(|a, b| a.key.cmp(&b.key));
+            nodes
+        }
+        build(None, &seen)
+    }
+
+    /// Notes with no inbound links from other notes. Excluded notes are
+    /// never orphans; neither are attachments.
+    pub fn orphans(&self) -> Vec<FileId> {
+        (0..self.files.len())
+            .filter(|&id| {
+                let f = &self.files[id];
+                f.kind == Kind::Note && !f.excluded && self.back[id].is_empty()
+            })
+            .collect()
+    }
+
+    /// Unresolved and ambiguous links grouped by target: most referenced
+    /// first, unresolved before ambiguous, then by target.
+    pub fn unresolved(&self) -> Vec<Target> {
+        let mut groups: Vec<Target> = Vec::new();
+        for source in 0..self.files.len() {
+            for (link, resolved) in self.links(source).iter().zip(&self.forward[source]) {
+                let (ambiguous, candidates) = match resolved {
+                    Resolved::File { .. } => continue,
+                    Resolved::Unresolved => (false, Vec::new()),
+                    Resolved::Ambiguous { pick, others, .. } => {
+                        let mut all: Vec<FileId> = std::iter::once(*pick)
+                            .chain(others.iter().copied())
+                            .collect();
+                        all.sort_by(|a, b| self.files[*a].rel.cmp(&self.files[*b].rel));
+                        (true, all)
+                    }
+                };
+                let src = Source {
+                    file: source,
+                    line: link.line,
+                    pick: resolved.target(),
+                };
+                let k = key(&link.target);
+                let k = k.strip_suffix(".md").unwrap_or(&k).to_string();
+                match groups
+                    .iter_mut()
+                    .find(|g| g.ambiguous == ambiguous && g.key == k)
+                {
+                    Some(g) => g.sources.push(src),
+                    None => groups.push(Target {
+                        ambiguous,
+                        key: k,
+                        shown: link.target.clone(),
+                        sources: vec![src],
+                        candidates,
+                    }),
+                }
+            }
+        }
+        groups.sort_by(|a, b| {
+            b.sources
+                .len()
+                .cmp(&a.sources.len())
+                .then(a.ambiguous.cmp(&b.ambiguous))
+                .then(a.key.cmp(&b.key))
+        });
+        groups
     }
 
     /// The shortest `[[link]]` target that reaches `id` alone from a note at

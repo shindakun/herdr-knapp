@@ -70,27 +70,48 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let bold = Style::new().add_modifier(Modifier::BOLD);
-    let mut spans = vec![
-        Span::styled(" knapp ", bold.add_modifier(Modifier::REVERSED)),
-        Span::raw(format!(" {} ", app.root_label)),
-        Span::styled("│ ", app.theme.dim()),
-    ];
-    for m in Mode::ALL {
-        let style = if m == app.mode {
-            bold.add_modifier(Modifier::UNDERLINED)
-        } else {
-            app.theme.dim()
-        };
-        spans.push(Span::styled(m.name(), style));
-        spans.push(Span::raw(" "));
-    }
+    let dim = app.theme.dim();
+    let width = usize::from(area.width);
     let send = if app.send_allow.is_empty() {
         "send off".to_string()
     } else {
         format!("send: {}", app.send_allow.join(" "))
     };
-    spans.push(Span::styled(format!("│ {send}"), app.theme.dim()));
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    let lead = |label: &str| {
+        vec![
+            Span::styled(" knapp ", bold.add_modifier(Modifier::REVERSED)),
+            Span::raw(format!(" {label} ")),
+            Span::styled("│ ", dim),
+        ]
+    };
+    let current = bold.add_modifier(Modifier::UNDERLINED);
+    let mut all = lead(&app.root_label);
+    for m in Mode::ALL {
+        all.push(Span::styled(
+            m.name(),
+            if m == app.mode { current } else { dim },
+        ));
+        all.push(Span::raw(" "));
+    }
+    all.push(Span::styled(format!("│ {send}"), dim));
+    let short = |label: &str| {
+        let mut spans = lead(label);
+        spans.push(Span::styled("◂ ", dim));
+        spans.push(Span::styled(app.mode.name(), current));
+        spans.push(Span::styled(" ▸", dim));
+        Line::from(spans)
+    };
+    // Every mode when it fits; else the current mode, with the root's last
+    // path segment when the whole label does not fit either.
+    let line = if Line::from(all.clone()).width() <= width {
+        Line::from(all)
+    } else if short(&app.root_label).width() <= width {
+        short(&app.root_label)
+    } else {
+        let last = app.root_label.rsplit('/').next().unwrap_or(&app.root_label);
+        short(last)
+    };
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_list(frame: &mut Frame, app: &mut App, area: Rect) {

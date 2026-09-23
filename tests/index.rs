@@ -95,3 +95,64 @@ fn exclude_config_skips_files_and_dirs() {
     assert!(index.id("img.png").is_none());
     assert_eq!(resolved_to(&index, "index.md", 0), Resolved::Unresolved);
 }
+
+fn tag_vault(name: &str, notes: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = common::temp_dir(name);
+    for (rel, text) in notes {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    root
+}
+
+#[test]
+fn tags_fold_case_keep_the_most_used_spelling_and_count_notes() {
+    let root = tag_vault(
+        "tags",
+        &[
+            ("a.md", "#Project/Alpha #project/beta\n"),
+            ("b.md", "#project/alpha #project/alpha\n"),
+            ("c.md", "#project/ALPHA #solo\n"),
+        ],
+    );
+    let (index, _) = Index::load(&root, &[], None).unwrap();
+    let tags = index.tags();
+    let shown: Vec<(&str, usize)> = tags.iter().map(|t| (t.shown.as_str(), t.count)).collect();
+    // `project` is written `project` three times and `Project` once.
+    assert_eq!(shown, [("project", 3), ("solo", 1)]);
+    let kids: Vec<(&str, usize, usize)> = tags[0]
+        .children
+        .iter()
+        .map(|t| (t.name(), t.count, t.notes.len()))
+        .collect();
+    // alpha: a.md, b.md (twice, one note), c.md; spelled `alpha` twice.
+    assert_eq!(kids, [("alpha", 3, 3), ("beta", 1, 1)]);
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn orphans_skip_self_links_excluded_notes_and_attachments() {
+    let root = tag_vault(
+        "orphans",
+        &[
+            ("a.md", "[[a]] only myself\n"),
+            ("b.md", "[[c]]\n"),
+            ("c.md", "linked from b\n"),
+            ("hidden.md", "nobody links here\n"),
+            ("pic.png", "not a note"),
+            (
+                ".obsidian/app.json",
+                r#"{"userIgnoreFilters": ["hidden.md"]}"#,
+            ),
+        ],
+    );
+    let (index, _) = Index::load(&root, &[], None).unwrap();
+    let orphans: Vec<&str> = index
+        .orphans()
+        .into_iter()
+        .map(|id| index.files[id].rel.as_str())
+        .collect();
+    assert_eq!(orphans, ["a.md", "b.md"]);
+    std::fs::remove_dir_all(root).ok();
+}

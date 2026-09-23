@@ -209,3 +209,16 @@ fn cli_rebuild_stats_and_unwritable_cache() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(err.matches("knapp: cache not written").count(), 1, "{err}");
 }
+
+#[test]
+fn a_prose_only_edit_is_a_modification() {
+    let root = temp_copy("vault-basic", "refresh-prose");
+    let (mut index, _) = Index::load(&root, &[], None).expect("load");
+    // Same links, headings, and tags; only the text differs.
+    std::fs::write(root.join("alpha.md"), "# Alpha\n\nFirst paragraph. ^para1\n\n## Second Section\n\nBack to [[index]]. More prose.\n").unwrap();
+    let change = index
+        .refresh(&BTreeSet::new())
+        .expect("refresh")
+        .expect("a prose edit is a change");
+    assert_eq!(change.modified, ["alpha.md"]);
+}

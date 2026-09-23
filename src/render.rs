@@ -27,6 +27,13 @@ pub struct LinkHit {
     pub link: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkState {
+    Resolved,
+    Ambiguous,
+    Unresolved,
+}
+
 /// Styles, with or without color (`NO_COLOR`).
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -53,14 +60,22 @@ impl Theme {
         }
     }
     pub fn link(self, state: &Resolved) -> Style {
+        self.link_state(match state {
+            Resolved::File { .. } => LinkState::Resolved,
+            Resolved::Ambiguous { .. } => LinkState::Ambiguous,
+            Resolved::Unresolved => LinkState::Unresolved,
+        })
+    }
+
+    pub fn link_state(self, state: LinkState) -> Style {
         let s = Style::new().add_modifier(Modifier::UNDERLINED);
         match (state, self.color) {
-            (Resolved::File { .. }, true) => s.fg(Color::Cyan),
-            (Resolved::Ambiguous { .. }, true) => s.fg(Color::Yellow),
-            (Resolved::Unresolved, true) => s.fg(Color::Red).add_modifier(Modifier::DIM),
-            (Resolved::File { .. }, false) => s,
-            (Resolved::Ambiguous { .. }, false) => s.add_modifier(Modifier::BOLD),
-            (Resolved::Unresolved, false) => s.add_modifier(Modifier::DIM),
+            (LinkState::Resolved, true) => s.fg(Color::Cyan),
+            (LinkState::Ambiguous, true) => s.fg(Color::Yellow),
+            (LinkState::Unresolved, true) => s.fg(Color::Red).add_modifier(Modifier::DIM),
+            (LinkState::Resolved, false) => s,
+            (LinkState::Ambiguous, false) => s.add_modifier(Modifier::BOLD),
+            (LinkState::Unresolved, false) => s.add_modifier(Modifier::DIM),
         }
     }
     pub fn callout(self) -> Style {

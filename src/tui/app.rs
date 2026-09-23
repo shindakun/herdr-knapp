@@ -15,7 +15,7 @@ use ratatui::widgets::ListState;
 use std::path::PathBuf;
 
 use crate::index::{block_fragment, key, FileId, Index, Resolved};
-use crate::render::{self, Theme};
+use crate::render::{self, LinkState, Theme};
 use crate::scan::Kind;
 use crate::search::{Match, MAX_RESULTS};
 
@@ -32,17 +32,34 @@ pub enum Mode {
     Tree,
     Backlinks,
     Forward,
+    Tags,
+    Unresolved,
+    Orphans,
+    Recent,
     Search,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 4] = [Mode::Tree, Mode::Backlinks, Mode::Forward, Mode::Search];
+    pub const ALL: [Mode; 8] = [
+        Mode::Tree,
+        Mode::Backlinks,
+        Mode::Forward,
+        Mode::Tags,
+        Mode::Unresolved,
+        Mode::Orphans,
+        Mode::Recent,
+        Mode::Search,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Mode::Tree => "Tree",
             Mode::Backlinks => "Backlinks",
             Mode::Forward => "Forward",
+            Mode::Tags => "Tags",
+            Mode::Unresolved => "Unresolved",
+            Mode::Orphans => "Orphans",
+            Mode::Recent => "Recent",
             Mode::Search => "Search",
         }
     }
@@ -61,6 +78,8 @@ pub enum Page {
     Summary,
     Note(String),
     Unresolved(String),
+    /// An ambiguous target, by its `key()`.
+    Ambiguous(String),
     Attachment(String),
 }
 
@@ -102,6 +121,8 @@ pub enum RowAction {
         link: Option<usize>,
     },
     Follow(usize),
+    Tag(String),
+    Show(Page),
     Nothing,
 }
 
@@ -137,6 +158,7 @@ pub struct App {
     pub detail_area: Rect,
     pub narrow: bool,
     expanded: BTreeSet<String>,
+    expanded_tags: BTreeSet<String>,
     history: Vec<Visit>,
     cursor: usize,
     /// A source line to scroll to, and a link to select, once the page is
@@ -173,6 +195,7 @@ impl App {
             detail_area: Rect::default(),
             narrow: false,
             expanded: BTreeSet::new(),
+            expanded_tags: BTreeSet::new(),
             history: vec![Visit {
                 page: Page::Summary,
                 scroll: 0,
@@ -243,6 +266,10 @@ impl App {
             Mode::Tree => self.tree_rows(),
             Mode::Backlinks => self.backlink_rows(),
             Mode::Forward => self.forward_rows(),
+            Mode::Tags => self.tag_rows(),
+            Mode::Unresolved => self.unresolved_rows(),
+            Mode::Orphans => self.orphan_rows(),
+            Mode::Recent => self.recent_rows(),
             Mode::Search => self.search_rows(),
         });
         self.rows = Some(rows.clone());
@@ -374,6 +401,114 @@ impl App {
             .collect()
     }
 
+    fn open_row(&self, rel: &str, prefix: String) -> Row {
+        Row {
+            line: Line::from(vec![
+                Span::styled(prefix, self.theme.dim()),
+                Span::raw(rel.to_string()),
+            ]),
+            action: RowAction::Open {
+                rel: rel.to_string(),
+                line: None,
+                link: None,
+            },
+        }
+    }
+
+    fn tag_rows(&self) -> Vec<Row> {
+        fn walk(app: &App, nodes: &[crate::index::TagNode], depth: usize, rows: &mut Vec<Row>) {
+            let indent = "  ".repeat(depth);
+            for n in nodes {
+                let open = app.expanded_tags.contains(&n.key);
+                let mark = if open { "▾" } else { "▸" };
+                rows.push(Row {
+                    line: Line::from(vec![
+                        Span::raw(indent.clone()),
+                        Span::styled(format!("{mark} #"), app.theme.dim()),
+                        Span::styled(
+                            n.name().to_string(),
+                            Style::new().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(format!("  {}", n.count), app.theme.dim()),
+                    ]),
+                    action: RowAction::Tag(n.key.clone()),
+                });
+                if open {
+                    walk(app, &n.children, depth + 1, rows);
+                    for &id in &n.notes {
+                        rows.push(app.open_row(&app.index.files[id].rel, format!("{indent}    ")));
+                    }
+                }
+            }
+        }
+        let tags = self.index.tags();
+        if tags.is_empty() {
+            return vec![self.message_row("No tags.")];
+        }
+        let mut rows = Vec::new();
+        walk(self, &tags, 0, &mut rows);
+        rows
+    }
+
+    fn unresolved_rows(&self) -> Vec<Row> {
+        let groups = self.index.unresolved();
+        if groups.is_empty() {
+            return vec![self.message_row("Every link resolves.")];
+        }
+        groups
+            .iter()
+            .map(|g| {
+                let (mark, page, state) = if g.ambiguous {
+                    ("? ", Page::Ambiguous(g.key.clone()), LinkState::Ambiguous)
+                } else {
+                    (
+                        "✗ ",
+                        Page::Unresolved(g.shown.clone()),
+                        LinkState::Unresolved,
+                    )
+                };
+                Row {
+                    line: Line::from(vec![
+                        Span::styled(format!("{mark}{:>3}  ", g.sources.len()), self.theme.dim()),
+                        Span::styled(g.shown.clone(), self.theme.link_state(state)),
+                    ]),
+                    action: RowAction::Show(page),
+                }
+            })
+            .collect()
+    }
+
+    fn orphan_rows(&self) -> Vec<Row> {
+        let orphans = self.index.orphans();
+        if orphans.is_empty() {
+            return vec![self.message_row("No orphans.")];
+        }
+        orphans
+            .iter()
+            .map(|&id| self.open_row(&self.index.files[id].rel, String::new()))
+            .collect()
+    }
+
+    fn recent_rows(&self) -> Vec<Row> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let mut notes: Vec<&crate::index::File> = self
+            .index
+            .files
+            .iter()
+            .filter(|f| f.kind == Kind::Note && !f.excluded)
+            .collect();
+        notes.sort_by(|a, b| b.mtime_ns.cmp(&a.mtime_ns).then(a.rel.cmp(&b.rel)));
+        notes
+            .iter()
+            .map(|f| {
+                let secs = (now.saturating_sub(f.mtime_ns) / 1_000_000_000) as u64;
+                self.open_row(&f.rel, format!("{:>4}  ", age(secs)))
+            })
+            .collect()
+    }
+
     fn search_rows(&self) -> Vec<Row> {
         if self.query.is_empty() {
             return vec![self.message_row("/ to search.")];
@@ -497,7 +632,7 @@ impl App {
                 Some(id) if wikilink => format!("[[{}]]", self.index.shortest_link(id)),
                 _ => self.index.root.join(&rel).display().to_string(),
             },
-            Page::Unresolved(target) => target,
+            Page::Unresolved(target) | Page::Ambiguous(target) => target,
             Page::Summary => {
                 self.status = Some("open a note to copy it".into());
                 return;
@@ -551,6 +686,7 @@ impl App {
             Page::Summary => self.summary(),
             Page::Note(rel) => self.note_detail(rel, width),
             Page::Unresolved(target) => self.unresolved_detail(target),
+            Page::Ambiguous(key) => self.ambiguous_detail(key),
             Page::Attachment(rel) => self.attachment_detail(rel),
         }
     }
@@ -684,6 +820,60 @@ impl App {
         self.text_detail(format!("unresolved: {target}"), lines, hits)
     }
 
+    fn ambiguous_detail(&self, key: &str) -> Detail {
+        let Some(g) = self
+            .index
+            .unresolved()
+            .into_iter()
+            .find(|g| g.ambiguous && g.key == key)
+        else {
+            return self.text_detail(
+                key.to_string(),
+                vec![Line::from(format!("{key} is no longer ambiguous"))],
+                Vec::new(),
+            );
+        };
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        let underline = Style::new().add_modifier(Modifier::UNDERLINED);
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled(g.shown.clone(), bold),
+                Span::raw(format!(" matches {} files", g.candidates.len())),
+            ]),
+            Line::default(),
+            Line::from(Span::styled("Candidates:", self.theme.dim())),
+        ];
+        let mut hits = Vec::new();
+        let mut row = |lines: &mut Vec<Line<'static>>, text: String, rel: String, line: u32| {
+            hits.push(Hit {
+                line: lines.len(),
+                cols: 2..2 + text.chars().count() as u16,
+                target: HitTarget::Open { rel, line },
+            });
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(text, underline),
+            ]));
+        };
+        for &c in &g.candidates {
+            let rel = self.index.files[c].rel.clone();
+            row(&mut lines, rel.clone(), rel, 1);
+        }
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Referenced from:",
+            self.theme.dim(),
+        )));
+        for s in &g.sources {
+            let rel = self.index.files[s.file].rel.clone();
+            let goes = s
+                .pick
+                .map_or(String::new(), |p| format!(" → {}", self.index.files[p].rel));
+            row(&mut lines, format!("{rel}:{}{goes}", s.line), rel, s.line);
+        }
+        self.text_detail(format!("ambiguous: {}", g.shown), lines, hits)
+    }
+
     fn attachment_detail(&self, rel: &str) -> Detail {
         let size = std::fs::metadata(self.index.root.join(rel)).map_or(0, |m| m.len());
         let kind = rel.rsplit_once('.').map_or("file", |(_, ext)| ext);
@@ -811,6 +1001,13 @@ impl App {
             }
             RowAction::Open { rel, line, link } => self.open_rel(&rel, line, link),
             RowAction::Follow(i) => self.follow(i),
+            RowAction::Tag(key) => {
+                if !self.expanded_tags.remove(&key) {
+                    self.expanded_tags.insert(key);
+                }
+                self.rows = None;
+            }
+            RowAction::Show(page) => self.navigate(page, None),
             RowAction::Nothing => {}
         }
     }
@@ -1080,3 +1277,22 @@ pub const HELP: &[(&str, &str)] = &[
     ("esc", "close help; focus the list"),
     ("q, ctrl-c", "quit"),
 ];
+
+/// The largest whole unit of an age in seconds: `42s`, `5m`, `3h`, `2d`,
+/// `6w`, `14mo`, `2y`.
+pub fn age(secs: u64) -> String {
+    const UNITS: [(u64, &str); 6] = [
+        (365 * 86_400, "y"),
+        (30 * 86_400, "mo"),
+        (7 * 86_400, "w"),
+        (86_400, "d"),
+        (3_600, "h"),
+        (60, "m"),
+    ];
+    for (size, unit) in UNITS {
+        if secs >= size {
+            return format!("{}{unit}", secs / size);
+        }
+    }
+    format!("{secs}s")
+}

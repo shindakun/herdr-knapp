@@ -162,7 +162,10 @@ any tag under it, each note once; Obsidian's tag pane counts occurrences
 instead.
 
 Following an ambiguous target from Unresolved opens a page listing its
-candidates, pick first, and the notes that link to it; both are followable.
+candidates, sorted by path, and the notes that link to it, each with the
+file its link goes to. Obsidian's pick depends on the linking note's
+folder, so one name can go to different files from different notes. Both
+lists are followable.
 
 The detail panel renders the note: headings, lists and task lists, block
 quotes and callouts (`> [!note] Title`), code blocks, tables, and rules.
@@ -516,7 +519,7 @@ file.
    `notes` pane entry in the manifest. Built.
 4. `o`, `y`, `Y`. Search. Built.
 5. Tags, Unresolved, Orphans, and Recent modes; `knapp tags` and
-   `knapp orphans`.
+   `knapp orphans`. Built.
 6. `send` with the allowlist and agent picker. Tests before the key binding.
 7. Graph: tree fallback, then the graphics frame. PNG embeds in the detail
    panel.

@@ -85,6 +85,16 @@ LINKS = {
     },
 }
 
+# Each note's tags, by hand, in file order (frontmatter first). Notes not
+# listed have none.
+TAGS = {
+    "vault-basic": {
+        "index.md": ["home", "meta/index", "inline-tag", "nested/child"],
+        "beta.md": ["heading-tag"],
+    },
+    "vault-syntax": {"syntax.md": ["real-tag"]},
+}
+
 HEADING_PUNCT = re.compile(r'[!"#$%&()*+,.:;<=>?@^`{|}~/\[\]\\\r\n]')
 
 
@@ -224,6 +234,43 @@ def split_link(written):
     return is_markdown, target, fragment if hash_ else None
 
 
+def tag_lines(tags_by_note):
+    """COUNT<TAB>TAG lines: tags compare without case and show their most used
+    spelling (ties to the first seen); parents count their children's notes."""
+    spellings = {}  # key -> {spelling: [occurrences, first seen]}
+    notes = {}  # key -> notes tagged exactly
+    order = 0
+    for note in sorted(tags_by_note):
+        for tag in tags_by_note[note]:
+            prefix = tag.rstrip("/")
+            while True:
+                s = spellings.setdefault(prefix.lower(), {}).setdefault(prefix, [0, order])
+                s[0] += 1
+                order += 1
+                notes.setdefault(prefix.lower(), set())
+                if prefix == tag.rstrip("/"):
+                    notes[prefix.lower()].add(note)
+                if "/" not in prefix:
+                    break
+                prefix = prefix.rsplit("/", 1)[0]
+
+    def subtree(k):
+        out = set(notes[k])
+        for other in notes:
+            if other.startswith(k + "/"):
+                out |= notes[other]
+        return out
+
+    def walk(parent):
+        kids = sorted(k for k in notes if (k.rsplit("/", 1)[0] if "/" in k else None) == parent)
+        for k in kids:
+            shown = max(spellings[k].items(), key=lambda s: (s[1][0], -s[1][1]))[0]
+            yield f"{len(subtree(k))}\t{shown}\n"
+            yield from walk(k)
+
+    return "".join(walk(None))
+
+
 def file_part(path):
     return path.replace("/", "_")
 
@@ -269,6 +316,14 @@ def generate(out):
             with open(os.path.join(out, f"{fixture}.backlinks.{file_part(target)}.txt"), "w") as f:
                 for source, line, text in sorted(hits):
                     f.write(f"{source}:{line}\t{text}\n")
+
+        with open(os.path.join(out, f"{fixture}.tags.txt"), "w") as f:
+            f.write(tag_lines(TAGS.get(fixture, {})))
+        notes_here = [p for p in vault.files if p.lower().endswith(".md")]
+        with open(os.path.join(out, f"{fixture}.orphans.txt"), "w") as f:
+            for note in notes_here:
+                if note not in backlinks:
+                    f.write(note + "\n")
 
         groups = {}
         # sorted() is stable: path order, then each note's link order.

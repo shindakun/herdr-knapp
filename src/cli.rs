@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::config::{self, Config};
-use crate::index::{self, key, Fragment, Index, LoadStats, Resolved};
+use crate::index::{self, Fragment, Index, LoadStats, Resolved};
 use crate::scan::Kind;
 
 pub const USAGE: &str = "usage: knapp <command> [args]
@@ -15,6 +15,8 @@ commands:
   links FILE [--root NAME|PATH]           forward links, with resolution state
   backlinks FILE [--root NAME|PATH]       notes linking to FILE
   unresolved [--root NAME|PATH] [--json]  unresolved and ambiguous targets
+  orphans [--root NAME|PATH]              notes nothing links to
+  tags [--root NAME|PATH]                 tags with note counts
   pane [--root NAME|PATH]                 browse the notes in a terminal pane
   index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
                                           load the root and write the cache
@@ -205,63 +207,32 @@ pub fn backlinks(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-struct Group {
-    state: &'static str,
-    key: String,
-    target: String,
-    candidates: Vec<String>,
-    sources: Vec<(String, u32)>,
-}
-
 pub fn unresolved(args: &[String]) -> Result<(), String> {
     let args = parse_args(args, false, &["--json"])?;
     let Opened { index, .. } = open(&args)?;
-    let mut groups: Vec<Group> = Vec::new();
-    for (source, file) in index.files.iter().enumerate() {
-        for (link, resolved) in index.links(source).iter().zip(&index.forward[source]) {
-            let (state, candidates) = match resolved {
-                Resolved::File { .. } => continue,
-                Resolved::Unresolved => ("unresolved", Vec::new()),
-                Resolved::Ambiguous { pick, others, .. } => (
-                    "ambiguous",
-                    std::iter::once(pick)
-                        .chain(others)
-                        .map(|&c| index.files[c].rel.clone())
-                        .collect(),
-                ),
-            };
-            let k = key(&link.target);
-            let k = k.strip_suffix(".md").unwrap_or(&k).to_string();
-            let source = (file.rel.clone(), link.line);
-            match groups.iter_mut().find(|g| g.state == state && g.key == k) {
-                Some(g) => g.sources.push(source),
-                None => groups.push(Group {
-                    state,
-                    key: k,
-                    target: link.target.clone(),
-                    candidates,
-                    sources: vec![source],
-                }),
-            }
+    let groups = index.unresolved();
+    let state = |g: &crate::index::Target| {
+        if g.ambiguous {
+            "ambiguous"
+        } else {
+            "unresolved"
         }
-    }
-    groups.sort_by(|a, b| {
-        b.sources
-            .len()
-            .cmp(&a.sources.len())
-            .then((a.state != "unresolved").cmp(&(b.state != "unresolved")))
-            .then(a.key.cmp(&b.key))
-    });
+    };
+    let rel = |id: usize| index.files[id].rel.clone();
     if args.flags.contains("--json") {
         let json: Vec<serde_json::Value> = groups
             .iter()
             .map(|g| {
                 serde_json::json!({
-                    "target": g.target,
-                    "state": g.state,
+                    "target": g.shown,
+                    "state": state(g),
                     "count": g.sources.len(),
-                    "sources": g.sources.iter().map(|(path, line)| serde_json::json!({"path": path, "line": line})).collect::<Vec<_>>(),
-                    "candidates": g.candidates,
+                    "sources": g.sources.iter().map(|s| serde_json::json!({
+                        "path": rel(s.file),
+                        "line": s.line,
+                        "goes_to": s.pick.map(rel),
+                    })).collect::<Vec<_>>(),
+                    "candidates": g.candidates.iter().map(|&c| rel(c)).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -272,10 +243,37 @@ pub fn unresolved(args: &[String]) -> Result<(), String> {
     } else {
         let mut out = String::new();
         for g in &groups {
-            out.push_str(&format!("{}\t{}\t{}\n", g.sources.len(), g.state, g.target));
+            out.push_str(&format!("{}\t{}\t{}\n", g.sources.len(), state(g), g.shown));
         }
         print!("{out}");
     }
+    Ok(())
+}
+
+pub fn orphans(args: &[String]) -> Result<(), String> {
+    let args = parse_args(args, false, &[])?;
+    let Opened { index, .. } = open(&args)?;
+    let mut out = String::new();
+    for id in index.orphans() {
+        out.push_str(&index.files[id].rel);
+        out.push('\n');
+    }
+    print!("{out}");
+    Ok(())
+}
+
+pub fn tags(args: &[String]) -> Result<(), String> {
+    let args = parse_args(args, false, &[])?;
+    let Opened { index, .. } = open(&args)?;
+    fn walk(nodes: &[crate::index::TagNode], out: &mut String) {
+        for n in nodes {
+            out.push_str(&format!("{}\t{}\n", n.count, n.shown));
+            walk(&n.children, out);
+        }
+    }
+    let mut out = String::new();
+    walk(&index.tags(), &mut out);
+    print!("{out}");
     Ok(())
 }
 

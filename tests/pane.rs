@@ -294,3 +294,141 @@ fn search_query_line_and_stale_results() {
     p.keys("\n"); // open the result
     assert_eq!(p.app.page(), &Page::Note("index.md".into()));
 }
+
+use knapp::tui::app::age;
+
+#[test]
+fn age_units() {
+    let cases = [
+        (0, "0s"),
+        (59, "59s"),
+        (60, "1m"),
+        (3_599, "59m"),
+        (3_600, "1h"),
+        (86_399, "23h"),
+        (86_400, "1d"),
+        (7 * 86_400, "1w"),
+        (29 * 86_400, "4w"),
+        (30 * 86_400, "1mo"),
+        (364 * 86_400, "12mo"),
+        (365 * 86_400, "1y"),
+    ];
+    for (secs, want) in cases {
+        assert_eq!(age(secs), want, "{secs}");
+    }
+}
+
+#[test]
+fn tab_visits_every_mode_in_order() {
+    let mut p = Pane::new(&fixture("vault-basic"), 120, 20);
+    let mut seen = vec![p.app.mode];
+    for _ in 0..8 {
+        p.keys("\t");
+        seen.push(p.app.mode);
+    }
+    assert_eq!(
+        seen,
+        [
+            Mode::Tree,
+            Mode::Backlinks,
+            Mode::Forward,
+            Mode::Tags,
+            Mode::Unresolved,
+            Mode::Orphans,
+            Mode::Recent,
+            Mode::Search,
+            Mode::Tree
+        ]
+    );
+}
+
+#[test]
+fn tags_unfold_and_open_a_note() {
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 20);
+    p.keys("\t\t\t");
+    assert_eq!(p.app.mode, Mode::Tags);
+    let rows = p.draw();
+    assert!(rows[1].starts_with("▸ #heading-tag  1"), "{rows:?}");
+    // meta is the fourth tag: heading-tag, home, inline-tag, meta.
+    p.keys("jjj\n");
+    let rows = p.draw();
+    assert!(rows[4].starts_with("▾ #meta  1"), "{rows:?}");
+    assert!(rows[5].starts_with("  ▸ #index  1"), "{rows:?}");
+    p.keys("j\nj\n"); // unfold index, open index.md under it
+    assert_eq!(p.app.page(), &Page::Note("index.md".into()));
+}
+
+#[test]
+fn ambiguous_target_page_lists_candidates_and_sources() {
+    let mut p = Pane::new(&fixture("vault-ambiguous"), 100, 20);
+    p.keys("\t\t\t\t");
+    assert_eq!(p.app.mode, Mode::Unresolved);
+    let screen = p.screen();
+    assert!(screen.contains("?   3  same"), "{screen}");
+    p.keys("\n");
+    assert_eq!(p.app.page(), &Page::Ambiguous("same".into()));
+    let screen = p.screen();
+    assert!(screen.contains("same matches 3 files"), "{screen}");
+    // Obsidian's pick depends on the linking note's folder.
+    assert!(screen.contains("root.md:3 → a/same.md"), "{screen}");
+    assert!(screen.contains("b/linker.md:3 → b/same.md"), "{screen}");
+    // The candidates are sorted by path; follow the first.
+    p.keys("ln\n");
+    assert_eq!(p.app.page(), &Page::Note("a/same.md".into()));
+}
+
+#[test]
+fn orphans_and_recent() {
+    let root = temp_copy("vault-broken", "pane-recent");
+    let mut p = Pane::new(&root, 100, 20);
+    p.keys("\t\t\t\t\t");
+    assert_eq!(p.app.mode, Mode::Orphans);
+    let rows = p.draw();
+    assert!(
+        rows[1].starts_with("orphan.md") && rows[2].starts_with("self.md"),
+        "{rows:?}"
+    );
+
+    // temp_copy ages every file a minute; touch one and it leads Recent.
+    std::fs::write(root.join("loop-b.md"), "# Loop B\n\n[[loop-c]] edited\n").unwrap();
+    p.app.batch(&BTreeSet::from(["loop-b.md".to_string()]));
+    p.keys("\t");
+    assert_eq!(p.app.mode, Mode::Recent);
+    let rows = p.draw();
+    assert!(
+        rows[1].trim_start().starts_with("0s  loop-b.md"),
+        "{rows:?}"
+    );
+    assert!(rows[2].trim_start().starts_with("1m  "), "{rows:?}");
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn narrow_header_keeps_the_mode_visible() {
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 10);
+    assert!(p.draw()[0].contains("Tree Backlinks Forward Tags"));
+    let mut p = Pane::new(&fixture("vault-basic"), 40, 10);
+    p.keys("\t\t\t");
+    let header = p.draw()[0].clone();
+    assert!(header.contains("◂ Tags ▸"), "{header}");
+    assert!(
+        unicode_width::UnicodeWidthStr::width(header.as_str()) <= 40,
+        "{header}"
+    );
+}
+
+#[test]
+fn the_open_note_shows_a_prose_edit() {
+    let root = temp_copy("vault-basic", "pane-prose");
+    let mut p = Pane::new(&root, 100, 20);
+    p.keys("j\n"); // alpha.md
+    assert!(!p.screen().contains("More prose"));
+    std::fs::write(
+        root.join("alpha.md"),
+        "# Alpha\n\nFirst paragraph. ^para1\n\n## Second Section\n\nBack to [[index]]. More prose.\n",
+    )
+    .unwrap();
+    p.app.batch(&BTreeSet::from(["alpha.md".to_string()]));
+    assert!(p.screen().contains("More prose"), "{}", p.screen());
+    std::fs::remove_dir_all(root).ok();
+}

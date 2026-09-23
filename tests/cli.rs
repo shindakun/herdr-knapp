@@ -129,10 +129,12 @@ fn fixtures_match_expected_output() {
                 format!("{fixture}.backlinks.{part}.txt"),
             );
         }
-        check(
-            vec!["unresolved".into(), "--root".into(), root.clone()],
-            format!("{fixture}.unresolved.txt"),
-        );
+        for command in ["unresolved", "orphans", "tags"] {
+            check(
+                vec![command.into(), "--root".into(), root.clone()],
+                format!("{fixture}.{command}.txt"),
+            );
+        }
     }
     assert!(
         unused.is_empty(),

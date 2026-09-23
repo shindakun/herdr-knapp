@@ -10,6 +10,9 @@
 - Notes pane: tree, rendered note, backlinks, and forward links, with link
   following, history, a folded frontmatter table, mouse, and a narrow
   layout. It updates as files change.
+- Tags, Unresolved, Orphans, and Recent modes, and the `orphans` and
+  `tags` commands. `unresolved --json` shows where each ambiguous link
+  goes.
 - `o` opens the note in the editor and resumes the pane after; `y` / `Y`
   copy the path or a `[[wikilink]]` with OSC 52; `/` searches as you type,
   through `rg` when available.

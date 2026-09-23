@@ -5,8 +5,9 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 to 4 of `docs/PLAN.md` are built: the link index, its
-cache and watcher, the CLI, and the notes pane with editing and search. The `open` action and its
+Status: steps 1 to 5 of `docs/PLAN.md` are built: the link index, its
+cache and watcher, the CLI, and the notes pane with editing, search, tags,
+unresolved links, orphans, and recent notes. The `open` action and its
 keybinding come in a later step; until then, open the pane with:
 
 ```sh
@@ -15,8 +16,10 @@ herdr plugin pane open --plugin shindakun.knapp --entrypoint notes
 
 ## The pane
 
-A list on the left (Tree, Backlinks, or Forward; `tab` switches) and the
-open note on the right, rendered with its links styled by state. `enter`
+A list on the left and the open note on the right, rendered with its links
+styled by state. `tab` switches the list: Tree, Backlinks, Forward, Tags,
+Unresolved, Orphans, Recent, and Search. An ambiguous link's page shows
+every candidate and where each link to it goes. `enter`
 opens a note or follows the selected link, `n` / `N` step through links,
 `[` / `]` go back and forward, and `?` lists every key. Below 80 columns
 the pane shows one side at a time; `h` / `l` switch.
@@ -40,6 +43,8 @@ while it runs.
 knapp links FILE [--root NAME|PATH]
 knapp backlinks FILE [--root NAME|PATH]
 knapp unresolved [--root NAME|PATH] [--json]
+knapp orphans [--root NAME|PATH]
+knapp tags [--root NAME|PATH]
 knapp index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
 ```
 
@@ -50,6 +55,9 @@ knapp index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
 - `backlinks` prints `source:line` and the linking line for every note that
   links to FILE.
 - `unresolved` counts missing and ambiguous targets across the root.
+- `orphans` lists notes no other note links to.
+- `tags` prints each tag with the number of notes carrying it, parents
+  counting their children. Tags compare without case, as in Obsidian.
 - `index` loads the root and prints counts. `--stats` adds timings and
   cache use, `--rebuild` ignores the cache, and `--watch` keeps running and
   prints a line for each change to the tree.
