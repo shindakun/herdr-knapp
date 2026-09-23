@@ -1,0 +1,5 @@
+3	resolved	-	[Guide](docs/guide.md)	docs/guide.md
+4	resolved	ok	[Setup](docs/guide.md#getting-started)	docs/guide.md
+5	resolved	-	[Spaces](docs/my%20notes.md)	docs/my notes.md
+6	unresolved	-	[Outside](../outside.md)	-
+7	unresolved	-	[Missing](docs/missing.md)	-

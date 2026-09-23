@@ -1,0 +1,4 @@
+b/linker.md:5	- [[../a/same]]
+root.md:3	- [[same]]
+root.md:6	- [[/a/same]]
+root.md:7	- [[SAME]]

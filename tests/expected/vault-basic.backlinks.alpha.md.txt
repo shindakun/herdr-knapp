@@ -1,0 +1,2 @@
+beta.md:8	- "[[alpha]]"
+index.md:7	Links: [[alpha]], [[Alpha|the alpha note]], [[alpha#Second Section]], [[alpha#^para1]], [[alpha.md]].

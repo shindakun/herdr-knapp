@@ -1,0 +1,3 @@
+3	ambiguous	-	[[same]]	b/same.md,a/same.md,c/deep/same.md
+4	resolved	-	[[./same]]	b/same.md
+5	resolved	-	[[../a/same]]	a/same.md

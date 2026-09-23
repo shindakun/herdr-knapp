@@ -1,0 +1,3 @@
+index.md:8	Path link: [[dir/deep]]. Embeds: ![[img.png]] and ![[beta]].
+index.md:9	Nested heading: [[beta#Top#Inner]]. Missing heading: [[beta#Nowhere]].
+index.md:10	Markdown: [beta](beta.md) and [deep](dir/deep.md#Deep%20Notes).

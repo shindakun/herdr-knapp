@@ -1,0 +1,2 @@
+3	resolved	-	[[self]]	self.md
+3	resolved	ok	[[#Self]]	self.md

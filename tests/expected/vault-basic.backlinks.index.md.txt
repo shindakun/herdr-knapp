@@ -1,0 +1,2 @@
+alpha.md:7	Back to [[index]].
+dir/deep.md:3	Up: [index](../index.md).

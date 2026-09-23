@@ -1,0 +1,5 @@
+3	unresolved	-	[[missing]]	-
+3	unresolved	-	[[missing]]	-
+3	unresolved	-	[[Other Missing]]	-
+3	resolved	-	[[ref]]	ref.md
+4	resolved	missing	[[loop-a#No Such Heading]]	loop-a.md

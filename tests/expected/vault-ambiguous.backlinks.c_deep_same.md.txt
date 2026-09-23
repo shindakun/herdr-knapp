@@ -1,0 +1,1 @@
+root.md:5	- [[deep/same]]

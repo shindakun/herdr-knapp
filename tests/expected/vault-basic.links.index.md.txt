@@ -1,0 +1,13 @@
+3	resolved	-	[[dir/deep]]	dir/deep.md
+7	resolved	-	[[alpha]]	alpha.md
+7	resolved	-	[[Alpha|the alpha note]]	alpha.md
+7	resolved	ok	[[alpha#Second Section]]	alpha.md
+7	resolved	ok	[[alpha#^para1]]	alpha.md
+7	resolved	-	[[alpha.md]]	alpha.md
+8	resolved	-	[[dir/deep]]	dir/deep.md
+8	resolved	-	![[img.png]]	img.png
+8	resolved	-	![[beta]]	beta.md
+9	resolved	ok	[[beta#Top#Inner]]	beta.md
+9	resolved	missing	[[beta#Nowhere]]	beta.md
+10	resolved	-	[beta](beta.md)	beta.md
+10	resolved	ok	[deep](dir/deep.md#Deep%20Notes)	dir/deep.md

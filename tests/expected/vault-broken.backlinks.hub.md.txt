@@ -1,0 +1,1 @@
+orphan.md:3	Nothing links here. See [[hub]].

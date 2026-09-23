@@ -1,0 +1,3 @@
+hub.md:4	[[loop-a#No Such Heading]]
+loop-c.md:3	[[loop-a]]
+ref.md:3	[[missing]] once more, then [[loop-a]].
