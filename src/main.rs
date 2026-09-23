@@ -9,6 +9,7 @@ fn main() -> ExitCode {
         Some("backlinks") => cli::backlinks(&args[1..]),
         Some("unresolved") => cli::unresolved(&args[1..]),
         Some("index") => cli::index(&args[1..]),
+        Some("pane") => cli::pane(&args[1..]),
         None | Some("--help" | "-h" | "help") => {
             println!("{USAGE}");
             Ok(())

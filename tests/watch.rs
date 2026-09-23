@@ -108,3 +108,41 @@ fn dot_folders_and_the_cache_dir_are_ignored() {
     );
     std::fs::remove_dir_all(root).ok();
 }
+
+/// Starts a watcher and hands it to a reader thread, returning only the
+/// channel, the way the pane's event loop does. Anything the thread does not
+/// own is dropped when this returns.
+fn reader(root: &Path) -> std::sync::mpsc::Receiver<BTreeSet<String>> {
+    let w = watch(root, None).expect("watch");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Some(batch) = w.next_batch() {
+            if tx.send(batch).is_err() {
+                return;
+            }
+        }
+    });
+    rx
+}
+
+/// A closure that names only `Watch::batches` captures only that field, so
+/// the watcher is dropped and events stop; `next_batch` keeps it alive.
+#[test]
+fn a_watch_moved_into_a_thread_keeps_watching() {
+    let root = temp_copy("vault-basic", "watch-thread");
+    let rx = reader(&root);
+    std::thread::sleep(Duration::from_millis(600));
+    while rx.try_recv().is_ok() {}
+    std::fs::write(root.join("late.md"), "x\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let batch = rx
+            .recv_timeout(left)
+            .expect("no batch from the moved watcher");
+        if batch.contains("late.md") {
+            break;
+        }
+    }
+    std::fs::remove_dir_all(root).ok();
+}

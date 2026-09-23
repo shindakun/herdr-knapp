@@ -305,7 +305,12 @@ With no config file there is one root, the workspace directory (the current
 directory outside herdr), and sending is off.
 
 The pane opens on the first root that contains the workspace directory, else
-the first root. CLI commands take `--root NAME|PATH`; without it they use the
+the first root. The workspace directory is `KNAPP_CWD` when the `open`
+action sets it, else the directory of the workspace's agent, else herdr's
+`workspace_cwd` unless it lies in herdr's plugin directory. `workspace_cwd`
+is the focused pane's directory, so when another plugin's pane has focus it
+names that plugin's checkout. With no workspace directory and no configured
+root, the pane says so and waits for `q`. CLI commands take `--root NAME|PATH`; without it they use the
 configured root that contains the file argument or the current directory,
 else the current directory as an unconfigured root.
 
@@ -468,7 +473,7 @@ file.
    Built.
 2. Cache, stat sweep, watcher. Built.
 3. Pane: tree, detail, backlinks, forward, link following, history. The
-   `notes` pane entry in the manifest.
+   `notes` pane entry in the manifest. Built.
 4. `o`, `y`, `Y`. Search.
 5. Tags, orphans, recent.
 6. `send` with the allowlist and agent picker. Tests before the key binding.

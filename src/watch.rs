@@ -19,6 +19,16 @@ pub struct Watch {
     pub batches: Receiver<BTreeSet<String>>,
 }
 
+impl Watch {
+    /// Blocks for the next batch; `None` once the watcher has stopped. A
+    /// thread that reads batches should call this, not `batches` directly:
+    /// a closure that names only the `batches` field captures only that
+    /// field, and the watcher is dropped.
+    pub fn next_batch(&self) -> Option<BTreeSet<String>> {
+        self.batches.recv().ok()
+    }
+}
+
 pub fn watch(root: &Path, ignore_dir: Option<&Path>) -> Result<Watch, String> {
     let root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
     let ignore_dir =

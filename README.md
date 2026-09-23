@@ -5,9 +5,25 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 and 2 of `docs/PLAN.md` are built: the link index, its
-cache and watcher, and the CLI. The Herdr pane is not built yet, so the
-manifest has no entry points.
+Status: steps 1 to 3 of `docs/PLAN.md` are built: the link index, its
+cache and watcher, the CLI, and the notes pane. The `open` action and its
+keybinding come in a later step; until then, open the pane with:
+
+```sh
+herdr plugin pane open --plugin shindakun.knapp --entrypoint notes
+```
+
+## The pane
+
+A list on the left (Tree, Backlinks, or Forward; `tab` switches) and the
+open note on the right, rendered with its links styled by state. `enter`
+opens a note or follows the selected link, `n` / `N` step through links,
+`[` / `]` go back and forward, and `?` lists every key. Below 80 columns
+the pane shows one side at a time; `h` / `l` switch.
+
+The pane opens on the workspace's notes: the directory of the workspace's
+agent, or a configured root that contains it. It follows changes on disk
+while it runs.
 
 ## Use it as a CLI
 

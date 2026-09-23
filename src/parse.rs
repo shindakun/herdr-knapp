@@ -59,7 +59,7 @@ pub struct Parsed {
     pub frontmatter: Vec<(String, Value)>,
 }
 
-const OPTIONS: Options = Options::ENABLE_WIKILINKS
+pub const OPTIONS: Options = Options::ENABLE_WIKILINKS
     .union(Options::ENABLE_TABLES)
     .union(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
 
@@ -168,6 +168,11 @@ impl LineIndex {
     fn line(&self, offset: usize) -> u32 {
         self.0.partition_point(|&s| s <= offset) as u32
     }
+}
+
+/// `%%comment%%` byte ranges in `text`, outside code.
+pub fn comments(text: &str) -> Vec<Range<usize>> {
+    comment_ranges(text, &code_ranges(text))
 }
 
 fn code_ranges(text: &str) -> Vec<Range<usize>> {

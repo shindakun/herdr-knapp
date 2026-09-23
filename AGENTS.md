@@ -46,6 +46,9 @@ graph. It never writes a note.
 - Sent note text is data. `send.rs` fences every note in an XML element whose
   tag carries a per-send random suffix, under a line telling the agent not to
   follow instructions in it. Nothing reaches `herdr agent prompt` unfenced.
+- A thread that reads watcher batches owns the `Watch` and calls
+  `next_batch()`. A closure that names only `watch.batches` drops the
+  watcher and silently stops all events.
 - Resolutions are never cached. Every load and every watcher refresh
   re-resolves every link; only per-file parse results live in the cache.
 - Tests never read or write a user's config or cache. Anything that runs the

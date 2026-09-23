@@ -512,15 +512,20 @@ impl Index {
         let Some(parsed) = &self.files[id].parsed else {
             return false;
         };
-        let parts: Vec<&str> = fragment.split('#').filter(|p| !p.is_empty()).collect();
-        if parts.is_empty() {
-            return false;
+        if let Some(block) = block_fragment(fragment) {
+            let block = block.to_lowercase();
+            return parsed.blocks.iter().any(|b| b.to_lowercase() == block);
         }
-        if let [only] = parts.as_slice() {
-            if let Some(id) = only.strip_prefix('^') {
-                let id = id.to_lowercase();
-                return parsed.blocks.iter().any(|b| b.to_lowercase() == id);
-            }
+        self.heading_line(id, fragment, markdown).is_some()
+    }
+
+    /// The line of the heading a fragment names, following Obsidian's
+    /// nested `#a#b` rule. `None` for block fragments and misses.
+    pub fn heading_line(&self, id: FileId, fragment: &str, markdown: bool) -> Option<u32> {
+        let parsed = self.files[id].parsed.as_ref()?;
+        let parts: Vec<&str> = fragment.split('#').filter(|p| !p.is_empty()).collect();
+        if parts.is_empty() || block_fragment(fragment).is_some() {
+            return None;
         }
         let mut matched = 0;
         let mut depth = 0u8;
@@ -532,11 +537,20 @@ impl Index {
                 matched += 1;
                 depth = h.level;
                 if matched == parts.len() {
-                    return true;
+                    return Some(h.line);
                 }
             }
         }
-        false
+        None
+    }
+}
+
+/// `^id` when the fragment is a single block reference.
+pub fn block_fragment(fragment: &str) -> Option<&str> {
+    let parts: Vec<&str> = fragment.split('#').filter(|p| !p.is_empty()).collect();
+    match parts.as_slice() {
+        [only] => only.strip_prefix('^'),
+        _ => None,
     }
 }
 

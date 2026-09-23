@@ -56,3 +56,26 @@ pub fn set_mtime(path: &Path, when: SystemTime) {
         .set_modified(when)
         .expect("set mtime");
 }
+
+/// Buffer rows as strings. A wide character fills two cells; the second is
+/// skipped so the row reads as the text it shows.
+pub fn rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+    use unicode_width::UnicodeWidthStr;
+    let area = buf.area;
+    (0..area.height)
+        .map(|y| {
+            let mut row = String::new();
+            let mut skip = 0;
+            for x in 0..area.width {
+                if skip > 0 {
+                    skip -= 1;
+                    continue;
+                }
+                let sym = buf[(x, y)].symbol();
+                skip = sym.width().saturating_sub(1);
+                row.push_str(sym);
+            }
+            row.trim_end().to_string()
+        })
+        .collect()
+}

@@ -17,8 +17,9 @@ done. Step numbers match the plan's Order.
   socket only for graphics, which has no CLI.
 - Tests never need a running herdr. A fake herdr is a shell script written
   to a temp dir and passed as `HERDR_BIN_PATH`. It appends its argv to a log
-  file and prints canned JSON from `tests/fixtures/herdr/`. The canned JSON is
-  real herdr 0.9.1 output.
+  file and prints canned JSON from `tests/fixtures/herdr/`. The canned JSON
+  has the shape of herdr 0.9.1's output, with only the fields knapp reads
+  and neutral values.
 - A step is done when `make check` passes, its CLI commands give the expected
   output on the fixtures, and, from step 3 on, it works in a real herdr
   session through `herdr plugin link .`.
@@ -377,22 +378,31 @@ Dependency for this step: `ratatui` 0.30 with default features off and
 - `ratatui::init()` sets up the terminal and installs a panic hook that
   restores it; `ratatui::restore()` on the way out. Mouse capture is on while
   running and off before restore.
-- Root: `--root`, else `KNAPP_CWD`, else `workspace_cwd` from
-  `HERDR_PLUGIN_CONTEXT_JSON` (a pane launched by `plugin pane open` gets
-  the context of its workspace; see herdr `src/app/api/plugins/panes.rs`),
-  else the current directory, then `Config::pick_root`.
+- Root: `--root`, else `KNAPP_CWD`, else `herdr::workspace_dir`: the cwd
+  of the workspace's agent from `herdr agent list` (the focused pane if it
+  is an agent, else the focused agent, else the first), else `workspace_cwd`
+  from `HERDR_PLUGIN_CONTEXT_JSON` unless it is inside herdr's plugin
+  directory (the `plugins` ancestor of `HERDR_PLUGIN_CONFIG_DIR`). Then
+  `Config::pick_root`. Outside herdr, the current directory. Under herdr
+  with no workspace directory, the first configured root, else an error.
+  `workspace_cwd` is the focused pane's cwd: in a real session it named the
+  herdr-file-viewer checkout because that plugin's pane had focus.
 - Load with the cache and write it when stale; write it again on quit. A
   root that fails to load shows the error in the pane; `q` still quits.
 - The pane's cwd is the plugin root, never the notes root.
 
 ### Event loop
 
-- One thread reads crossterm events, one forwards watcher batches. Both send
+- One thread reads crossterm events, one forwards watcher batches. The
+  batch thread owns the `Watch` and calls `next_batch()`: a `move` closure
+  that names only `watch.batches` captures only that field, the watcher is
+  dropped when the spawning scope ends, and no event ever arrives. Both send
   `AppEvent::{Key, Mouse, Resize, Batch}` into one channel. The main loop
   blocks on it, applies the event to `App`, and redraws.
-- On `Batch`, `Index::refresh`; on `Some(change)`, drop render caches for
-  the changed paths and keep the open note, selection, and history by rel
-  path. An open note that was removed shows `deleted: <path>` in the detail
+- On `Batch`, `Index::refresh`; on `Some(change)`, drop every render cache
+  (a new file can change link states in any note), keep the open note,
+  selection, and history by rel path, and show `updated: +a -r ~m` on the
+  status line. An open note that was removed shows `deleted: <path>` in the detail
   panel; history skips removed entries.
 
 ### App state
@@ -415,8 +425,8 @@ pub struct App {
 ```
 
 - `tab` cycles the modes built so far; later steps add theirs.
-- Tree rows: folders (folded by default) and files, sorted by name within a
-  folder. Excluded files are not listed. `enter` on a folder folds or
+- Tree rows: folders (folded by default), then files, each sorted by name
+  without regard to case. Excluded files are not listed. `enter` on a folder folds or
   unfolds it; on a file it opens it.
 - Backlinks rows: `source:line` and the trimmed linking line. `enter` opens
   the source scrolled to that line with that link selected.
@@ -440,7 +450,7 @@ pub struct Rendered {
 }
 pub struct LinkHit { pub line: usize, pub cols: Range<u16>, pub link: usize } // link: index into Parsed::links
 
-pub fn render(text: &str, parsed: &Parsed, states: &[Resolved], width: u16, fold_frontmatter: bool, color: bool) -> Rendered;
+pub fn render(text: &str, parsed: &Parsed, states: &[Resolved], width: u16, fold_frontmatter: bool, theme: Theme) -> Rendered;
 ```
 
 - pulldown-cmark with the parse options plus `ENABLE_TASKLISTS` and
@@ -452,8 +462,10 @@ pub fn render(text: &str, parsed: &Parsed, states: &[Resolved], width: u16, fold
   Code block lines and table cells are cut with `…`.
 - Headings: bold, with dim `#` markers, blank line before. Lists: `•` and
   numbers, two spaces per level, `[ ]` / `[x]` for tasks. Quotes: a `│`
-  and a space before each line. A quote whose first line starts `[!type]` is a callout: its first
-  line becomes `▌ Type: title`. Rules: a `─` line. Inline and fenced code:
+  and a space before each line. A quote whose first line starts `[!type]` is a callout: the
+  marker becomes `▌ Type:` and the title line ends at the first line break.
+  pulldown-cmark splits `[!type]` across text events, so the marker is read
+  across them. Rules: a `─` line. Inline and fenced code:
   a distinct color, or reverse with `NO_COLOR`.
 - Links: alias, link text, or target; underlined. Resolved in one color,
   ambiguous in another, unresolved dim. Wiki embeds of notes render as
@@ -480,17 +492,21 @@ The step closes after this runs in Herdr:
 
 ### Pane tests
 
-- `tests/render.rs`: headings, lists, tasks, quotes, callouts, code, tables,
-  rules, wrapping at 40 columns, wide characters, links styled by state,
-  frontmatter folded and open, `%%comments%%` hidden, and `hits` pointing
-  at the right `Parsed::links` entries on `vault-basic/index.md`.
-- `tests/pane.rs`: drive `App` with key events on `TestBackend` at 100x30
-  and 60x20, and assert rows of the buffer (the helper in `tests/common`
-  skips the blank cell after a wide character): open `index.md` from the
-  tree, follow `[[alpha#Second Section]]` and land on that heading, go back
-  with `[`, follow an unresolved link, open a backlink at its line, fold
-  and unfold a folder, and see a refresh after a file change keep the open
-  note.
+- `tests/render.rs`: every block type at 30 columns, wrapping that keeps
+  punctuation with its link, hits that point at the right links on
+  `vault-basic/index.md`, frontmatter folded and open with a property link
+  hit, link colors by state and with `NO_COLOR`, and `cut`.
+- `tests/pane.rs`: `App` on `TestBackend` driven by key events: the summary
+  and folded tree at start, folding a folder, following
+  `[[alpha#Second Section]]` in a six-row terminal so the jump must scroll,
+  back and forward, an unresolved link page, backlinks opening the source
+  with its link selected, Forward rows with state, the narrow layout, help,
+  a refresh that keeps the open note and then shows it deleted, and quit.
+- `tests/herdr.rs`: agent choice, and `workspace_dir` refusing a plugin
+  checkout in `workspace_cwd` in favor of the agent's directory.
+- `tests/watch.rs`: a `Watch` handed to a reader thread inside a helper
+  function keeps delivering batches. With the field-only capture this test
+  fails with `Disconnected`.
 
 ## Step 4: editor, copy, search
 
@@ -602,9 +618,8 @@ pub fn suffix() -> String;  // 8 hex chars from 4 bytes of /dev/urandom
 - `open-pane`: port herdr-rss `src/launch.rs` (`decide`: open, focus, or
   close from `herdr pane list`), with the pane title `Knapp`. On `Open`, run
   `plugin pane open` with `--env KNAPP_CWD=<workspace_cwd>` and no `--cwd`.
-  herdr-rss finds its pane by `label` and `cwd`. Confirm in a real session
-  that a knapp pane's `pane list` entry has `label` set to the title before
-  relying on it.
+  A knapp pane's entry in `pane list` has `label` set to the manifest title
+  (`Knapp`) and `cwd` set to the plugin root.
 - `peek-selection`: read `clicked_url`, else `selected_text`.
   - A `file://` URL may carry a host (`ls --hyperlink` writes
     `file://hostname/path`). Accept an empty host, `localhost`, or this

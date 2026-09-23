@@ -15,6 +15,7 @@ commands:
   links FILE [--root NAME|PATH]           forward links, with resolution state
   backlinks FILE [--root NAME|PATH]       notes linking to FILE
   unresolved [--root NAME|PATH] [--json]  unresolved and ambiguous targets
+  pane [--root NAME|PATH]                 browse the notes in a terminal pane
   index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
                                           load the root and write the cache
   help                                    show this message
@@ -303,7 +304,7 @@ pub fn index(args: &[String]) -> Result<(), String> {
     let ignore = cache.as_deref().and_then(Path::parent);
     let watch = crate::watch::watch(&index.root, ignore)?;
     let mut stdout = std::io::stdout();
-    for touched in watch.batches.iter() {
+    while let Some(touched) = watch.next_batch() {
         let t = Instant::now();
         if let Some(change) = index.refresh(&touched)? {
             let _ = writeln!(
@@ -356,4 +357,9 @@ fn stats_text(index: &Index, stats: &LoadStats, cache_write_ms: f64) -> String {
         out.push_str(&format!("skipped_filter\t{f}\n"));
     }
     out
+}
+
+pub fn pane(args: &[String]) -> Result<(), String> {
+    let args = parse_args(args, false, &[])?;
+    crate::tui::run(args.root.as_deref())
 }

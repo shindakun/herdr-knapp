@@ -7,5 +7,8 @@
   them, with heading and block fragments checked.
 - Config file with named roots and `exclude`. Obsidian's Excluded files are
   honored.
+- Notes pane: tree, rendered note, backlinks, and forward links, with link
+  following, history, a folded frontmatter table, mouse, and a narrow
+  layout. It updates as files change.
 - Parse cache per root, reused when a file's mtime and size match. `index`
   command with `--stats`, `--rebuild`, and `--watch`.
