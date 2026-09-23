@@ -1,11 +1,13 @@
 pub mod cli;
 pub mod config;
+pub mod editor;
 pub mod graph;
 pub mod herdr;
 pub mod index;
 pub mod parse;
 pub mod render;
 pub mod scan;
+pub mod search;
 pub mod send;
 pub mod tui;
 pub mod watch;

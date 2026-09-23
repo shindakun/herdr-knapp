@@ -205,3 +205,92 @@ fn quit_keys() {
         .key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(p.app.quit);
 }
+
+use knapp::search::Match;
+use knapp::tui::app::Effect;
+
+#[test]
+fn o_opens_the_editor_at_the_selected_link_or_top_line() {
+    let root = fixture("vault-basic");
+    let mut p = Pane::new(&root, 100, 20);
+    p.key(KeyCode::End);
+    p.keys("\no"); // index.md, nothing selected: the top line
+    assert_eq!(
+        p.app.take_effects(),
+        [Effect::Edit {
+            path: std::fs::canonicalize(&root).unwrap().join("index.md"),
+            line: 1
+        }]
+    );
+    p.keys("lnnno"); // third link, on line 7
+    assert!(matches!(
+        p.app.take_effects().as_slice(),
+        [Effect::Edit { line: 7, .. }]
+    ));
+
+    // An attachment: a status line, no effect.
+    p.keys("h");
+    p.key(KeyCode::Home);
+    p.keys("jjj\no");
+    assert!(p.app.take_effects().is_empty());
+    assert!(p.screen().contains("o opens notes only"));
+}
+
+#[test]
+fn y_copies_the_path_and_capital_y_the_wikilink() {
+    let root = fixture("vault-basic");
+    let mut p = Pane::new(&root, 100, 20);
+    p.keys("\nj\n"); // unfold dir/, open dir/deep.md
+    p.keys("yY");
+    let canonical = std::fs::canonicalize(&root).unwrap();
+    assert_eq!(
+        p.app.take_effects(),
+        [
+            Effect::Copy(canonical.join("dir/deep.md").display().to_string()),
+            Effect::Copy("[[deep]]".into()),
+        ]
+    );
+}
+
+#[test]
+fn capital_y_uses_a_path_when_the_name_is_ambiguous() {
+    let mut p = Pane::new(&fixture("vault-ambiguous"), 100, 20);
+    p.keys("\nj\n"); // unfold a/, open a/same.md
+    p.keys("Y");
+    assert_eq!(p.app.take_effects(), [Effect::Copy("[[a/same]]".into())]);
+}
+
+#[test]
+fn search_query_line_and_stale_results() {
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 20);
+    p.keys("/alp");
+    assert_eq!(p.app.mode, Mode::Search);
+    let effects = p.app.take_effects();
+    let gens: Vec<u64> = effects
+        .iter()
+        .map(|e| match e {
+            Effect::Search { generation, .. } => *generation,
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(gens, [1, 2, 3]);
+    assert!(matches!(&effects[2], Effect::Search { query, .. } if query == "alp"));
+    assert!(p.screen().contains("/alp"));
+
+    let m = |rel: &str| Match {
+        rel: rel.into(),
+        line: 7,
+        text: "Links: [[alpha]]".into(),
+        ranges: vec![std::ops::Range { start: 9, end: 12 }],
+    };
+    p.app.results(2, vec![m("index.md")]); // stale
+    p.app.results(3, vec![m("index.md"), m("not-indexed.md")]);
+    p.keys("\n"); // close the query line
+    let screen = p.screen();
+    assert!(screen.contains("index.md:7"), "{screen}");
+    assert!(!screen.contains("not-indexed"), "{screen}");
+    assert_eq!(screen.matches("index.md:7").count(), 1, "{screen}");
+
+    p.keys("\n"); // open the result
+    assert_eq!(p.app.page(), &Page::Note("index.md".into()));
+}

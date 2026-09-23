@@ -12,25 +12,38 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::ListState;
 
+use std::path::PathBuf;
+
 use crate::index::{block_fragment, key, FileId, Index, Resolved};
 use crate::render::{self, Theme};
 use crate::scan::Kind;
+use crate::search::{Match, MAX_RESULTS};
+
+/// Work the event loop does for the app: processes, the terminal, threads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Effect {
+    Edit { path: PathBuf, line: u32 },
+    Copy(String),
+    Search { generation: u64, query: String },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Tree,
     Backlinks,
     Forward,
+    Search,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 3] = [Mode::Tree, Mode::Backlinks, Mode::Forward];
+    pub const ALL: [Mode; 4] = [Mode::Tree, Mode::Backlinks, Mode::Forward, Mode::Search];
 
     pub fn name(self) -> &'static str {
         match self {
             Mode::Tree => "Tree",
             Mode::Backlinks => "Backlinks",
             Mode::Forward => "Forward",
+            Mode::Search => "Search",
         }
     }
 }
@@ -132,6 +145,12 @@ pub struct App {
     details: HashMap<(Page, u16, bool), Rc<Detail>>,
     rows: Option<Rc<Vec<Row>>>,
     tree: Dir,
+    effects: Vec<Effect>,
+    /// The search query line: open while typing.
+    pub query: String,
+    pub query_open: bool,
+    generation: u64,
+    results: Vec<Match>,
 }
 
 impl App {
@@ -163,6 +182,11 @@ impl App {
             details: HashMap::new(),
             rows: None,
             tree: Dir::default(),
+            effects: Vec::new(),
+            query: String::new(),
+            query_open: false,
+            generation: 0,
+            results: Vec::new(),
         };
         app.build_tree();
         app
@@ -219,6 +243,7 @@ impl App {
             Mode::Tree => self.tree_rows(),
             Mode::Backlinks => self.backlink_rows(),
             Mode::Forward => self.forward_rows(),
+            Mode::Search => self.search_rows(),
         });
         self.rows = Some(rows.clone());
         rows
@@ -347,6 +372,139 @@ impl App {
                 }
             })
             .collect()
+    }
+
+    fn search_rows(&self) -> Vec<Row> {
+        if self.query.is_empty() {
+            return vec![self.message_row("/ to search.")];
+        }
+        if self.results.is_empty() {
+            return vec![self.message_row("No matches.")];
+        }
+        let hit = Style::new().add_modifier(Modifier::REVERSED);
+        self.results
+            .iter()
+            .map(|m| {
+                let lead = m.text.len() - m.text.trim_start().len();
+                let mut spans = vec![Span::raw(format!("{}:{}  ", m.rel, m.line))];
+                let mut pos = lead;
+                for r in &m.ranges {
+                    if r.start < pos || r.end > m.text.len() {
+                        continue;
+                    }
+                    spans.push(Span::styled(
+                        m.text[pos..r.start].to_string(),
+                        self.theme.dim(),
+                    ));
+                    spans.push(Span::styled(m.text[r.clone()].to_string(), hit));
+                    pos = r.end;
+                }
+                spans.push(Span::styled(m.text[pos..].to_string(), self.theme.dim()));
+                Row {
+                    line: Line::from(spans),
+                    action: RowAction::Open {
+                        rel: m.rel.clone(),
+                        line: Some(m.line),
+                        link: None,
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Results from the search thread. Stale generations are dropped, and so
+    /// is any path that is not a visible, indexed note.
+    pub fn results(&mut self, generation: u64, batch: Vec<Match>) {
+        if generation != self.generation {
+            return;
+        }
+        for m in batch {
+            let visible = self.index.id(&m.rel).is_some_and(|id| {
+                let f = &self.index.files[id];
+                f.kind == Kind::Note && !f.excluded
+            });
+            if visible && self.results.len() < MAX_RESULTS {
+                self.results.push(m);
+            }
+        }
+        if self.mode == Mode::Search {
+            self.rows = None;
+        }
+    }
+
+    pub fn take_effects(&mut self) -> Vec<Effect> {
+        std::mem::take(&mut self.effects)
+    }
+
+    fn query_changed(&mut self) {
+        self.generation += 1;
+        self.results.clear();
+        self.rows = None;
+        self.list.select(Some(0));
+        if !self.query.is_empty() {
+            self.effects.push(Effect::Search {
+                generation: self.generation,
+                query: self.query.clone(),
+            });
+        }
+    }
+
+    fn query_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Enter | KeyCode::Esc => self.query_open = false,
+            KeyCode::Char('c') if ctrl => self.quit = true,
+            KeyCode::Char('u') if ctrl => {
+                self.query.clear();
+                self.query_changed();
+            }
+            KeyCode::Backspace => {
+                if self.query.pop().is_some() {
+                    self.query_changed();
+                }
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.query.push(c);
+                self.query_changed();
+            }
+            _ => {}
+        }
+    }
+
+    /// Opens the note in the editor at the selected link's line, else the
+    /// top visible line.
+    fn edit(&mut self) {
+        let Page::Note(rel) = self.page().clone() else {
+            self.status = Some("o opens notes only".into());
+            return;
+        };
+        let width = self.detail_width();
+        let detail = self.detail(width, self.detail_height() as u16);
+        let row = self
+            .selected_hit
+            .and_then(|i| detail.hits.get(i))
+            .map_or(self.scroll, |h| h.line);
+        let line = detail.source_line.get(row).copied().unwrap_or(1);
+        self.effects.push(Effect::Edit {
+            path: self.index.root.join(&rel),
+            line,
+        });
+    }
+
+    fn copy(&mut self, wikilink: bool) {
+        let text = match self.page().clone() {
+            Page::Note(rel) | Page::Attachment(rel) => match self.index.id(&rel) {
+                Some(id) if wikilink => format!("[[{}]]", self.index.shortest_link(id)),
+                _ => self.index.root.join(&rel).display().to_string(),
+            },
+            Page::Unresolved(target) => target,
+            Page::Summary => {
+                self.status = Some("open a note to copy it".into());
+                return;
+            }
+        };
+        self.status = Some(format!("copied: {text}"));
+        self.effects.push(Effect::Copy(text));
     }
 
     fn message_row(&self, text: &str) -> Row {
@@ -751,6 +909,10 @@ impl App {
             }
             return;
         }
+        if self.query_open {
+            self.query_key(k);
+            return;
+        }
         let half = (self.detail_height() / 2).max(1) as isize;
         match k.code {
             KeyCode::Char('c') if ctrl => self.quit = true,
@@ -785,6 +947,15 @@ impl App {
             KeyCode::Char(']') => self.step_history(false),
             KeyCode::Char('n') => self.next_link(true),
             KeyCode::Char('N') => self.next_link(false),
+            KeyCode::Char('/') => {
+                self.mode = Mode::Search;
+                self.focus = Focus::List;
+                self.query_open = true;
+                self.rows = None;
+            }
+            KeyCode::Char('o') => self.edit(),
+            KeyCode::Char('y') => self.copy(false),
+            KeyCode::Char('Y') => self.copy(true),
             KeyCode::Char('f') => {
                 self.fold_frontmatter = !self.fold_frontmatter;
                 self.selected_hit = None;
@@ -902,6 +1073,9 @@ pub const HELP: &[(&str, &str)] = &[
     ("[ ], ctrl-o", "back and forward in history"),
     ("tab shift-tab", "list mode"),
     ("f", "fold or unfold frontmatter"),
+    ("/", "search; enter or esc leaves the query"),
+    ("o", "open the note in the editor"),
+    ("y Y", "copy the path, copy a [[wikilink]]"),
     ("?", "this help"),
     ("esc", "close help; focus the list"),
     ("q, ctrl-c", "quit"),

@@ -42,6 +42,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_detail(frame, app, detail_area);
     }
 
+    if app.query_open {
+        let line = Line::from(vec![
+            Span::styled("/", Style::new().add_modifier(Modifier::BOLD)),
+            Span::raw(app.query.clone()),
+            Span::styled("▏", app.theme.dim()),
+        ]);
+        frame.render_widget(Paragraph::new(line), status);
+        if app.help {
+            draw_help(frame, app);
+        }
+        return;
+    }
     let hint = app.status.clone().unwrap_or_else(|| {
         if app.narrow {
             "? keys  h l list/note  tab mode  q quit".into()

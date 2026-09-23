@@ -3,23 +3,33 @@
 pub mod app;
 pub mod ui;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::config::{self, Config};
 use crate::index::{self, Index};
 use crate::render::Theme;
-use app::App;
+use crate::scan::Kind;
+use crate::search::{self, Match};
+use app::{App, Effect};
 
 enum AppEvent {
     Term(Event),
     Batch(std::collections::BTreeSet<String>),
+    Results(u64, Vec<Match>),
 }
 
 fn var(name: &str) -> Option<String> {
@@ -43,12 +53,19 @@ fn base_dir() -> Result<Option<PathBuf>, String> {
         .map_err(|e| format!("current directory: {e}"))
 }
 
+struct Loaded {
+    app: App,
+    cache: Option<PathBuf>,
+    editor: String,
+    exclude: Vec<String>,
+}
+
 pub fn run(root_arg: Option<&str>) -> Result<(), String> {
     let loaded = load(root_arg);
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = match loaded {
-        Ok((app, cache)) => event_loop(&mut terminal, app, cache),
+        Ok(loaded) => event_loop(&mut terminal, loaded),
         Err(e) => show_error(&mut terminal, &e),
     };
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
@@ -56,7 +73,7 @@ pub fn run(root_arg: Option<&str>) -> Result<(), String> {
     result
 }
 
-fn load(root_arg: Option<&str>) -> Result<(App, Option<PathBuf>), String> {
+fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
     let config = Config::load()?;
     let root = match base_dir()? {
         Some(base) => config.pick_root(root_arg, &base, &base)?,
@@ -89,28 +106,83 @@ fn load(root_arg: Option<&str>) -> Result<(App, Option<PathBuf>), String> {
     let theme = Theme {
         color: var("NO_COLOR").is_none(),
     };
+    let editor = crate::editor::choose(
+        &config.editor,
+        var("VISUAL").as_deref(),
+        var("EDITOR").as_deref(),
+    );
     let mut app = App::new(index, label, root.send_allow, theme);
     app.status = status;
-    Ok((app, cache))
+    Ok(Loaded {
+        app,
+        cache,
+        editor,
+        exclude: config.exclude,
+    })
 }
 
-fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    mut app: App,
-    cache: Option<PathBuf>,
-) -> Result<(), String> {
-    let (tx, rx) = mpsc::channel();
-    let input = tx.clone();
-    thread::spawn(move || {
-        while let Ok(ev) = event::read() {
-            if input.send(AppEvent::Term(ev)).is_err() {
-                return;
+/// The input thread polls so it can stop reading the terminal while the
+/// editor runs; otherwise it would take the editor's keystrokes.
+struct Input {
+    paused: Arc<AtomicBool>,
+    idle: Arc<AtomicBool>,
+}
+
+impl Input {
+    fn spawn(tx: mpsc::Sender<AppEvent>) -> Self {
+        let paused = Arc::new(AtomicBool::new(false));
+        let idle = Arc::new(AtomicBool::new(false));
+        let (p, i) = (paused.clone(), idle.clone());
+        thread::spawn(move || loop {
+            if p.load(Ordering::SeqCst) {
+                i.store(true, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(20));
+                continue;
             }
+            i.store(false, Ordering::SeqCst);
+            match event::poll(Duration::from_millis(50)) {
+                Ok(true) => match event::read() {
+                    Ok(ev) => {
+                        if tx.send(AppEvent::Term(ev)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(_) => return,
+                },
+                Ok(false) => {}
+                Err(_) => return,
+            }
+        });
+        Input { paused, idle }
+    }
+
+    /// Stops reading and waits until the thread is between polls.
+    fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !self.idle.load(Ordering::SeqCst) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
         }
-    });
+    }
+
+    fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+}
+
+fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result<(), String> {
+    let Loaded {
+        mut app,
+        cache,
+        editor,
+        exclude,
+    } = loaded;
+    let (tx, rx) = mpsc::channel();
+    let input = Input::spawn(tx.clone());
     let ignore = cache.as_deref().and_then(|c| c.parent()).map(PathBuf::from);
     match crate::watch::watch(&app.index.root, ignore.as_deref()) {
         Ok(watch) => {
+            let tx = tx.clone();
             thread::spawn(move || {
                 while let Some(batch) = watch.next_batch() {
                     if tx.send(AppEvent::Batch(batch)).is_err() {
@@ -121,6 +193,8 @@ fn event_loop(
         }
         Err(e) => app.status = Some(format!("not watching for changes: {e}")),
     }
+    let rg = search::find_rg();
+    let mut search_cancel: Option<Arc<AtomicBool>> = None;
 
     loop {
         terminal
@@ -134,6 +208,73 @@ fn event_loop(
             AppEvent::Term(Event::Mouse(m)) => app.mouse(m),
             AppEvent::Term(_) => {}
             AppEvent::Batch(b) => app.batch(&b),
+            AppEvent::Results(generation, batch) => app.results(generation, batch),
+        }
+        for effect in app.take_effects() {
+            match effect {
+                Effect::Edit { path, line } => {
+                    input.pause();
+                    let result = run_editor(terminal, &editor, &path, line, &app.index.root);
+                    input.resume();
+                    if let Err(e) = result {
+                        app.status = Some(format!("editor: {e}"));
+                    }
+                }
+                Effect::Copy(text) => {
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(crate::editor::osc52(&text).as_bytes());
+                    let _ = out.flush();
+                }
+                Effect::Search { generation, query } => {
+                    if let Some(c) = search_cancel.take() {
+                        c.store(true, Ordering::Relaxed);
+                    }
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    search_cancel = Some(cancel.clone());
+                    let notes: Vec<String> = app
+                        .index
+                        .files
+                        .iter()
+                        .filter(|f| f.kind == Kind::Note && !f.excluded)
+                        .map(|f| f.rel.clone())
+                        .collect();
+                    let (root, exclude, rg, tx) = (
+                        app.index.root.clone(),
+                        exclude.clone(),
+                        rg.clone(),
+                        tx.clone(),
+                    );
+                    thread::spawn(move || {
+                        let mut batch = Vec::new();
+                        let mut last = Instant::now();
+                        let _ = search::search(
+                            &root,
+                            &query,
+                            &exclude,
+                            &notes,
+                            rg.as_deref(),
+                            &cancel,
+                            |m| {
+                                batch.push(m);
+                                if batch.len() >= 50 || last.elapsed() > Duration::from_millis(100)
+                                {
+                                    last = Instant::now();
+                                    return tx
+                                        .send(AppEvent::Results(
+                                            generation,
+                                            std::mem::take(&mut batch),
+                                        ))
+                                        .is_ok();
+                                }
+                                true
+                            },
+                        );
+                        if !batch.is_empty() {
+                            let _ = tx.send(AppEvent::Results(generation, batch));
+                        }
+                    });
+                }
+            }
         }
         if app.quit {
             break;
@@ -143,6 +284,34 @@ fn event_loop(
         let _ = app.index.save_cache(c);
     }
     Ok(())
+}
+
+/// Suspends the TUI, runs the editor in the root, and restores the TUI. The
+/// input thread must already be paused.
+fn run_editor(
+    terminal: &mut ratatui::DefaultTerminal,
+    editor: &str,
+    path: &Path,
+    line: u32,
+    root: &Path,
+) -> Result<(), String> {
+    let argv = crate::editor::command(editor, path, line);
+    let mut out = std::io::stdout();
+    let _ = execute!(out, DisableMouseCapture, LeaveAlternateScreen);
+    let _ = disable_raw_mode();
+    let _ = terminal.show_cursor();
+    let status = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(root)
+        .status();
+    let _ = enable_raw_mode();
+    let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture);
+    let _ = terminal.clear();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("{} exited with {s}", argv[0])),
+        Err(e) => Err(format!("{}: {e}", argv[0])),
+    }
 }
 
 /// A root that fails to load: say why, and wait for `q`.

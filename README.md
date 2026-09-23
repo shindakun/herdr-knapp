@@ -5,8 +5,8 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 to 3 of `docs/PLAN.md` are built: the link index, its
-cache and watcher, the CLI, and the notes pane. The `open` action and its
+Status: steps 1 to 4 of `docs/PLAN.md` are built: the link index, its
+cache and watcher, the CLI, and the notes pane with editing and search. The `open` action and its
 keybinding come in a later step; until then, open the pane with:
 
 ```sh
@@ -20,6 +20,15 @@ open note on the right, rendered with its links styled by state. `enter`
 opens a note or follows the selected link, `n` / `N` step through links,
 `[` / `]` go back and forward, and `?` lists every key. Below 80 columns
 the pane shows one side at a time; `h` / `l` switch.
+
+- `o` opens the note in your editor at the selected link's line, and the
+  pane updates when you save. The editor is `editor` in the config, else
+  `$VISUAL`, else `$EDITOR`, else `vi`. Herdr panes often lack the shell's
+  `$EDITOR`, so set `editor` in the config.
+- `y` copies the note's path and `Y` a `[[wikilink]]` to it, through the
+  terminal's clipboard (OSC 52), which works over SSH under Herdr.
+- `/` searches the notes as you type, with `rg` when it is on `PATH`.
+  Results are notes the tree shows; `.gitignore` does not hide any.
 
 The pane opens on the workspace's notes: the directory of the workspace's
 agent, or a configured root that contains it. It follows changes on disk
@@ -64,6 +73,7 @@ When Herdr runs knapp as a plugin, it reads
 
 ```toml
 exclude = ["node_modules/", "target/"]
+editor = "nvim"
 
 [[root]]
 name = "notes"

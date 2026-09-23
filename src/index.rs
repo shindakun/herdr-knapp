@@ -417,6 +417,12 @@ impl Index {
         if target.is_empty() {
             return vec![source];
         }
+        self.wikilink_from(target, dirname(&self.keys[source]))
+    }
+
+    /// `wikilink` for a link written in a note in `folder` (a `key()`ed
+    /// folder path, `""` for the root).
+    pub fn wikilink_from(&self, target: &str, folder: &str) -> Vec<FileId> {
         let mut link = key(target);
         let mut name = basename(&link).to_string();
         let mut candidates = if name.contains('.') {
@@ -435,7 +441,7 @@ impl Index {
         if name == link && candidates.len() == 1 {
             return candidates.clone();
         }
-        let mut folder = dirname(&self.keys[source]).to_string();
+        let mut folder = folder.to_string();
         let exact = |path: &str| candidates.iter().copied().find(|&c| self.keys[c] == path);
 
         if link.starts_with("./") || link.starts_with("../") {
@@ -487,6 +493,21 @@ impl Index {
         far.sort_by(by_len);
         near.extend(far);
         near
+    }
+
+    /// The shortest `[[link]]` target that reaches `id` alone from a note at
+    /// the root: trailing path segments, without `.md` for notes.
+    pub fn shortest_link(&self, id: FileId) -> String {
+        let rel = &self.files[id].rel;
+        let bare = match self.files[id].kind {
+            Kind::Note => rel.strip_suffix(".md").unwrap_or(rel),
+            Kind::Attachment => rel,
+        };
+        let parts: Vec<&str> = bare.split('/').collect();
+        (1..=parts.len())
+            .map(|n| parts[parts.len() - n..].join("/"))
+            .find(|t| self.wikilink_from(t, "") == [id])
+            .unwrap_or_else(|| bare.to_string())
     }
 
     /// A Markdown link: relative to the source note first. A path that climbs

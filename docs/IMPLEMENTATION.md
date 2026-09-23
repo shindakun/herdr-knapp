@@ -385,8 +385,8 @@ Dependency for this step: `ratatui` 0.30 with default features off and
   directory (the `plugins` ancestor of `HERDR_PLUGIN_CONFIG_DIR`). Then
   `Config::pick_root`. Outside herdr, the current directory. Under herdr
   with no workspace directory, the first configured root, else an error.
-  `workspace_cwd` is the focused pane's cwd: in a real session it named the
-  herdr-file-viewer checkout because that plugin's pane had focus.
+  `workspace_cwd` is the focused pane's cwd, so with another plugin's pane
+  focused it names that plugin's checkout.
 - Load with the cache and write it when stale; write it again on quit. A
   root that fails to load shows the error in the pane; `q` still quits.
 - The pane's cwd is the plugin root, never the notes root.
@@ -551,7 +551,8 @@ Tests assert on effects; the loop is checked in herdr.
 
 ### Copy
 
-- `osc52(text) -> String`: `ESC ] 52 ; c ; <base64> BEL`, written straight
+- `editor.rs` holds `choose`, `command`, `base64`, and
+  `osc52(text) -> String`: `ESC ] 52 ; c ; <base64> BEL`, written straight
   to stdout and flushed; ratatui's buffer is untouched. The base64 encoder
   is a few lines; no crate. Herdr accepts up to 192 KiB.
 - `y`: the note's absolute path. `Y`: the shortest trailing part of its
@@ -565,11 +566,14 @@ Tests assert on effects; the loop is checked in herdr.
   opens the query line; while it is open, keys edit the query (characters,
   `backspace`, `ctrl-u` to clear), and `enter` or `esc` closes it. Each
   change pushes `Effect::Search` with a new generation.
-- `search.rs`: `run(root, query, exclude, sink)` streams
-  `(rel, line, text, match_ranges)` to `sink` until 500 results or the
-  query is replaced. With `rg` on `PATH`:
-  `rg --json --fixed-strings --smart-case --no-ignore --glob '*.md' --glob '!<dir>/**'`
-  for each `exclude` folder, in the root. Read `match` records: `path.text`
+- `search.rs`:
+  `search(root, query, exclude, notes, rg, cancel, sink)` streams `Match`
+  values (`rel`, `line`, `text`, byte `ranges`) to `sink` until it returns
+  false, `cancel` is set, or 500 results. With `rg` on `PATH`:
+  `rg --json --fixed-strings --smart-case --no-ignore --iglob '*.md' --glob '!<dir>/**' -- <query> .`
+  for each `exclude` folder, in the root, with stdin set to null. Without
+  a path argument, `rg` searches stdin whenever stdin is not a terminal and
+  waits forever. Read `match` records: `path.text`
   (skip `path.bytes`, which is a non-UTF-8 name), `line_number`,
   `lines.text`, and `submatches[].start..end` (byte offsets into the line).
   Without `rg`, read each indexed note and match lines, lowercasing both

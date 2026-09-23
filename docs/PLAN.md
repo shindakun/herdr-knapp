@@ -457,6 +457,7 @@ src/
   herdr.rs      context json, pane open, agent prompt, graphics calls
   send.rs       allowlist enforcement, prompt fencing
   search.rs     ripgrep and built-in full-text search
+  editor.rs     editor choice and argv, OSC 52
   tui/
 assets/
   font/         the embedded label font and its OFL license
@@ -480,6 +481,11 @@ tests/
   cache.rs      cache reuse, bad caches, the two-second rule, refresh
   watch.rs      watcher batches and ignored paths
   perf.rs       ignored; cold load, warm load, and refresh of 5,000 notes
+  render.rs     every block type, wrapping, link hits, styles
+  pane.rs       the pane driven by keys on a test terminal
+  herdr.rs      agent choice and the workspace directory
+  editor.rs     editor argv, choice order, OSC 52
+  search.rs     ripgrep and built-in search agree; the index filters both
   common/       temp fixture copies with aged mtimes
   expected/     expected CLI output per fixture, from scripts/expected.py
   fixtures/herdr/  captured herdr 0.9.1 JSON for the fake herdr
@@ -495,7 +501,7 @@ file.
 2. Cache, stat sweep, watcher. Built.
 3. Pane: tree, detail, backlinks, forward, link following, history. The
    `notes` pane entry in the manifest. Built.
-4. `o`, `y`, `Y`. Search.
+4. `o`, `y`, `Y`. Search. Built.
 5. Tags, orphans, recent.
 6. `send` with the allowlist and agent picker. Tests before the key binding.
 7. Graph: tree fallback, then the graphics frame. PNG embeds in the detail

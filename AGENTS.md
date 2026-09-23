@@ -20,6 +20,8 @@ graph. It never writes a note.
   local subgraph, layout, Graphviz output, and PNG frame. `assets/font/` is
   the embedded label font and its license.
 - `src/herdr.rs` reads the environment Herdr injects and calls the Herdr CLI.
+- `src/editor.rs` picks and runs the editor and encodes OSC 52 copies;
+  `src/search.rs` is full-text search through `rg` or built in.
 - `src/send.rs` is the send allowlist.
 - `src/tui/` is the notes pane and the peek popup.
 - `tests/common/` has the temp-copy helpers; copies get old mtimes so the
@@ -49,6 +51,9 @@ graph. It never writes a note.
 - A thread that reads watcher batches owns the `Watch` and calls
   `next_batch()`. A closure that names only `watch.batches` drops the
   watcher and silently stops all events.
+- A child process knapp reads from gets `stdin(Stdio::null())` and, for
+  `rg`, an explicit path. `rg` with neither searches stdin when stdin is not
+  a terminal, and hangs.
 - Resolutions are never cached. Every load and every watcher refresh
   re-resolves every link; only per-file parse results live in the cache.
 - Tests never read or write a user's config or cache. Anything that runs the
