@@ -40,16 +40,20 @@ fn unknown_command_fails() {
 
 const REPO: &str = env!("CARGO_MANIFEST_DIR");
 
-/// Runs knapp from the repo root with an empty config dir, so a real user
-/// config cannot change the result.
+/// Runs knapp from the repo root with empty config and cache dirs, so a
+/// user's config cannot change the result and their cache is never touched.
 fn knapp_isolated(args: &[&str]) -> std::process::Output {
-    let config = std::env::temp_dir().join(format!("knapp-test-config-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("knapp-test-{}", std::process::id()));
+    let (config, cache) = (base.join("config"), base.join("cache"));
     std::fs::create_dir_all(&config).expect("create config dir");
+    std::fs::create_dir_all(&cache).expect("create cache dir");
     Command::new(env!("CARGO_BIN_EXE_knapp"))
         .args(args)
         .current_dir(REPO)
         .env("XDG_CONFIG_HOME", &config)
+        .env("XDG_CACHE_HOME", &cache)
         .env_remove("HERDR_PLUGIN_CONFIG_DIR")
+        .env_remove("HERDR_PLUGIN_STATE_DIR")
         .output()
         .expect("run knapp")
 }

@@ -44,8 +44,11 @@ graph. It never writes a note.
 - Sent note text is data. `send.rs` fences every note in an XML element whose
   tag carries a per-send random suffix, under a line telling the agent not to
   follow instructions in it. Nothing reaches `herdr agent prompt` unfenced.
-- Resolutions are never cached. Any add, remove, or rename re-resolves every
-  link; only per-file parse results live in the cache.
+- Resolutions are never cached. Every load and every watcher refresh
+  re-resolves every link; only per-file parse results live in the cache.
+- Tests never read or write a user's config or cache. Anything that runs the
+  binary sets `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` to temp directories and
+  removes `HERDR_PLUGIN_CONFIG_DIR` and `HERDR_PLUGIN_STATE_DIR`.
 - A change to what `parse.rs` extracts bumps the cache format version.
 - The manifest wires only commands that exist. An entrypoint for an unbuilt
   step is a broken plugin, not a placeholder.

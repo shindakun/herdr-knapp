@@ -253,32 +253,100 @@ Tests:
 
 ## Step 2: cache, stat sweep, watcher
 
-- Cache file: JSON,
-  `{"format": N, "root": "...", "files": {"<rel>": {"kind", "mtime_ns", "size", "parsed"}}}`.
-  `const CACHE_FORMAT: u32` lives in `index.rs`, and any change to `Parsed`
-  or to what `parse` extracts bumps it.
-- Name: SHA-256 (`sha2`) of the canonical root path, hex.
-- Load: scan, then compare each entry's mtime and size with the cache.
-  Reparse new and changed notes, drop removed ones, then resolve everything.
-  Write the cache only if something changed, to a temp file in the same
-  directory, then rename.
-- Watcher: `notify` 8 `RecommendedWatcher`, recursive on the root, feeding
-  the pane's channel. Debounce 150 ms of quiet, then handle the batch:
-  - Ignore paths under dot directories or excludes.
-  - A content change reparses the file, resolves that note's links, and
-    rebuilds `back`.
-  - A create, remove, or rename, or an event on a directory, rescans that
-    directory. If the set of names changed, resolve everything.
-- `index --stats` prints the counts of notes, attachments, links by state,
-  and tags, and the times for scan, parse, resolve, and cache write.
-  `index --rebuild` deletes the cache first.
-- `tests/perf.rs` is `#[ignore]`: it generates 5,000 linked notes in a temp
-  dir and prints cold and warm load times. Run it with
-  `cargo test --release -- --ignored`.
-- Tests: edit, add, rename, and delete files in a temp copy of a fixture,
-  reload, and check that states flip. In a copy of `vault-basic`, moving
-  `alpha.md` to `x/alpha.md` keeps `[[alpha]]` resolved (one candidate), and
-  then adding `y/alpha.md` makes it ambiguous with `x/alpha.md` as the pick.
+Dependencies for this step: `notify` 8, `sha2`.
+
+### Cache (index.rs)
+
+```rust
+pub struct LoadStats {
+    pub reused: usize,        // parses taken from the cache
+    pub parsed: usize,
+    pub scan_ms: f64, pub cache_read_ms: f64, pub parse_ms: f64,
+    pub resolve_ms: f64, pub cache_write_ms: f64,
+}
+
+impl Index {
+    pub fn load(root: &Path, exclude: &[String], cache: Option<&Path>) -> Result<(Index, LoadStats), String>;
+    pub fn refresh(&mut self, touched: &BTreeSet<String>) -> Result<Option<Change>, String>;
+    pub fn save_cache(&self, path: &Path) -> Result<(), String>;
+}
+```
+
+- File: `{"format": N, "root": "...", "written_ns": T, "files": {"<rel>": {"kind", "mtime_ns", "size", "parsed"}}}`,
+  compact JSON. `const CACHE_FORMAT: u32` sits in `index.rs`; any change to
+  `Parsed` or to what `parse` extracts bumps it.
+- Name: hex SHA-256 (`sha2`) of the canonical root path. `sha2` 0.11 has
+  no hex formatter; format each byte with `{:02x}`.
+- Directory: `cache_dir()` in `config.rs` returns the plugin state dir, else
+  `$XDG_CACHE_HOME/knapp`, else `~/.cache/knapp`, and the file goes under
+  `index/`.
+- Reuse: a cached parse is used when the file is still a note that needs
+  parsing (not excluded), mtime and size match, and
+  `mtime_ns < written_ns - 2 s`. Everything else is parsed.
+- A missing file, bad JSON, a different `format`, or a different `root`
+  means an empty cache. None of these is an error.
+- Write to `<name>.<pid>.tmp` in the same directory, then rename, so a CLI
+  run and a pane can write without corrupting each other. A failed write
+  prints `knapp: cache not written: <reason>` once and carries on.
+- CLI commands load with the cache and write it when `parsed > 0` or
+  entries were dropped.
+
+### Watcher (watch.rs)
+
+`notify` 8's `recommended_watcher` (FSEvents on macOS, inotify on Linux),
+recursive on the canonical root. On macOS, events carry canonical paths
+(`/private/var/...`), a rename arrives as two unpaired `Modify(Name(Any))`
+events, and the watched folder itself gets an event right after the watch
+starts.
+
+- A thread receives events and keeps the touched rel paths, dropping any
+  with a component starting with `.` and any inside the cache directory
+  (which may sit under the root).
+- It sends a batch after 150 ms without events, or 1 s after the first
+  event of a continuous stream.
+- `Index::refresh` runs the sweep again, reparses the touched notes plus any
+  whose mtime or size changed, drops removed files, and re-resolves
+  everything. It returns `None` when nothing changed, else a `Change` with
+  the added, removed, and modified paths.
+- `FileId`s change on every refresh. Anything held across a refresh (the
+  pane's open note, its history) holds rel paths.
+- The pane does not write the cache after each refresh, only after its first
+  load and on quit. After a crash, the next start's sweep catches up.
+
+### `knapp index`
+
+- Plain: load (writing the cache), print
+  `<notes> notes, <attachments> attachments, <links> links`.
+- `--rebuild`: delete this root's cache file first.
+- `--stats`: `key<TAB>value` lines: `notes`, `attachments`, `excluded`,
+  `links.resolved`, `links.ambiguous`, `links.unresolved`, `tags` (distinct),
+  `cache.reused`, `cache.parsed`, `ms.scan`, `ms.cache_read`, `ms.parse`,
+  `ms.resolve`, `ms.cache_write`, and one `skipped_filter` line per skipped
+  `/regex/` filter.
+- `--watch`: after the load, print one line per `Change`
+  (`+N -N ~N <ms> ms`) until killed.
+
+### Tests
+
+- `tests/cli.rs` sets `XDG_CACHE_HOME` to a temp directory and removes
+  `HERDR_PLUGIN_STATE_DIR`, so tests never touch a user's cache. The
+  fixture test then covers cached loads: every run after the first per
+  fixture reads the cache.
+- `tests/cache.rs`: a second load reuses every parse and gives identical
+  `forward` tables; a wrong `format`, corrupt JSON, and an unwritable cache
+  directory each fall back to parsing; rewriting a file with the same size
+  within the same second is seen (the two-second rule); deleting a file
+  drops it; `--rebuild` parses everything.
+- `tests/watch.rs`: in a temp copy of `vault-basic`, start the watcher, then
+  create, edit, rename, and delete notes, and wait (up to 5 s each) for the
+  `Change` and the resulting state flip. In a temp copy, moving `alpha.md`
+  to `x/alpha.md` keeps `[[alpha]]` resolved, and adding `y/alpha.md` makes
+  it ambiguous with `x/alpha.md` as the pick. Writes under `.obsidian/`
+  produce no `Change`.
+- `tests/perf.rs`, `#[ignore]`: generate 5,000 notes (20 links each, one
+  unresolved link and a block id per note, frontmatter tags) in a temp dir
+  with a fixed seed, then assert the plan's targets for cold load, warm load,
+  and one refresh. Run with `cargo test --release -- --ignored`.
 
 ## Step 3: the pane
 
@@ -286,8 +354,9 @@ Tests:
 - Threads: one reads crossterm events, one runs the watcher. Both send
   `AppEvent` into one channel, and the main loop redraws after each event.
 - `App` state: the index, list mode, list selection, the open note,
-  `history: Vec<FileId>` with a cursor, detail scroll, and the selected
-  link.
+  history with a cursor, detail scroll, and the selected link. The open note
+  and history are rel paths, since `FileId`s change on refresh. When the
+  open note is deleted, the detail panel says so and the history skips it.
 - `render.rs` turns pulldown events into `Vec<Line>` for a given width and
   records a `LinkHit { line, cols, link }` for every link, which `n`, `N`,
   and `enter` use. Cache the result by (note, width).

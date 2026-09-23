@@ -106,22 +106,32 @@ are notes; attachments are never orphans.
 ### Cache and freshness
 
 The cache holds per-file parse results, keyed by path, mtime, and size. It
-does not hold resolutions: those depend on every name in the tree, and they
-are recomputed from the name table on every load and after any add, remove,
-or rename. Changing one file's content reparses that file and re-resolves its
-own links. Creating `foo.md` can change `[[foo]]` elsewhere from unresolved
-to resolved, or from resolved to ambiguous, so any change to the set of names
-re-resolves everything.
+does not hold resolutions: those depend on every name in the tree, so every
+load and every change re-resolves all links. Creating `foo.md` can change
+`[[foo]]` elsewhere from unresolved to resolved, or from resolved to
+ambiguous.
 
-The cache file starts with a format version. A version mismatch discards it.
+Every start, CLI or pane, sweeps the tree with `stat`, reuses cached parses
+whose mtime and size match, and parses the rest. A file modified within two
+seconds before the cache was written is parsed again, since a second write
+in the same mtime tick would not change its mtime. A cache that is missing,
+unreadable, or from another format version is ignored and rebuilt. A cache
+that cannot be written costs one warning on stderr, not an error.
 
-Cache path: `HERDR_PLUGIN_STATE_DIR/index/<sha of canonical root>.json`, or
-`$XDG_CACHE_HOME/knapp/` when run outside herdr. Every start, CLI or pane,
-stats the tree and reparses changed files before answering. The watcher only
-keeps a running pane current.
+Cache path: `HERDR_PLUGIN_STATE_DIR/index/<sha of canonical root>.json` when
+herdr runs knapp as a plugin, else `$XDG_CACHE_HOME/knapp/index/`, else
+`~/.cache/knapp/index/`. The CLI writes it after a load that parsed or
+dropped anything. The pane writes it after its first load and when it
+quits.
 
-Target: a cold index of 5,000 notes in under two seconds; a warm start in the
-time of one stat sweep.
+While the pane runs, a filesystem watcher keeps the index current. Events
+under dot directories or the cache directory are ignored. After 150 ms
+without events (or 1 s of continuous events) the pane sweeps again,
+reparses every note an event named plus any whose mtime or size changed,
+and re-resolves. A sweep that finds nothing changed does nothing.
+
+Targets for 5,000 notes: a cold load under 2 seconds, a warm load under
+1 second, a watcher update under 300 ms.
 
 ## Views
 
@@ -376,8 +386,12 @@ knapp unresolved [--json]   # unresolved and ambiguous
 knapp orphans
 knapp tags
 knapp graph FILE [--hops N] [--dot]
-knapp index [--rebuild] [--stats]
+knapp index [--rebuild] [--stats] [--watch]
 ```
+
+`index` loads the root and writes the cache. `--stats` prints counts and
+timings, `--rebuild` ignores the cache, and `--watch` keeps running and
+prints a line per watcher update.
 
 `--dot` prints Graphviz. Every command except `pane`, `peek`, and the two
 actions takes `--root NAME|PATH`.
