@@ -145,11 +145,24 @@ open; the detail panel shows the root's counts until one is.
 | Tree | directories and files |
 | Backlinks | notes linking to the open note, with the linking line as context |
 | Forward | links out of the open note, marked resolved, ambiguous, or unresolved |
-| Tags | tag index, count per tag, drill into the notes |
+| Tags | tag tree with note counts; a tag unfolds to its notes |
 | Unresolved | every unresolved and ambiguous target, by count |
 | Orphans | notes with no inbound links |
-| Recent | by mtime |
+| Recent | notes by mtime, newest first, with their age |
 | Search | full text, ripgrep if on `PATH`, else built in |
+
+The `tab` order is Tree, Backlinks, Forward, Tags, Unresolved, Orphans,
+Recent, Search. The header lists every mode when it fits and otherwise only
+the current one.
+
+Tags compare without regard to case and show their most used spelling
+(ties go to the first in path order), as in Obsidian 1.14's `getTags`.
+`#a/b` is under `a`. A tag's count is the number of notes carrying it or
+any tag under it, each note once; Obsidian's tag pane counts occurrences
+instead.
+
+Following an ambiguous target from Unresolved opens a page listing its
+candidates, pick first, and the notes that link to it; both are followable.
 
 The detail panel renders the note: headings, lists and task lists, block
 quotes and callouts (`> [!note] Title`), code blocks, tables, and rules.
@@ -425,8 +438,8 @@ knapp peek-selection        # herdr action
 knapp links FILE            # forward links, with resolution state
 knapp backlinks FILE
 knapp unresolved [--json]   # unresolved and ambiguous
-knapp orphans
-knapp tags
+knapp orphans              # one path per line
+knapp tags                 # count and tag, parents included
 knapp graph FILE [--hops N] [--dot]
 knapp index [--rebuild] [--stats] [--watch]
 ```
@@ -502,7 +515,8 @@ file.
 3. Pane: tree, detail, backlinks, forward, link following, history. The
    `notes` pane entry in the manifest. Built.
 4. `o`, `y`, `Y`. Search. Built.
-5. Tags, orphans, recent.
+5. Tags, Unresolved, Orphans, and Recent modes; `knapp tags` and
+   `knapp orphans`.
 6. `send` with the allowlist and agent picker. Tests before the key binding.
 7. Graph: tree fallback, then the graphics frame. PNG embeds in the detail
    panel.

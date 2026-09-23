@@ -613,12 +613,87 @@ Link, open the pane, and:
 4. `/` and a word: results fill in while typing; `enter` on one opens the
    note at that line.
 
-## Step 5: tags, orphans, recent
+## Step 5: tags, unresolved, orphans, recent
 
-- Tags: a tree on `/`. A parent's count includes its children. Each note
-  counts once per tag.
-- Orphans: notes with an empty `back` entry.
-- Recent: notes by mtime, newest first.
+No new dependencies.
+
+### Index queries (index.rs)
+
+```rust
+pub struct TagNode { pub name: String, pub shown: String, pub notes: Vec<FileId>, pub children: Vec<TagNode> }
+impl Index {
+    pub fn tags(&self) -> Vec<TagNode>;          // tree, sorted by name, case-insensitive
+    pub fn orphans(&self) -> Vec<FileId>;        // notes, not excluded, empty `back`
+    pub fn unresolved(&self) -> Vec<Target>;     // the groups `knapp unresolved` prints
+}
+```
+
+- A tag's key is its name lowercased; `shown` is the spelling with the
+  most occurrences, ties to the first in path order (Obsidian's
+  `getTags` keeps the most frequent spelling). `notes` on a node are the notes tagged exactly that tag; a node's
+  count is the distinct notes in it and every node under it.
+- Move the grouping in `cli::unresolved` into `Index::unresolved`, so the
+  CLI and the Unresolved mode share it: `Target { state, key, shown,
+  sources: Vec<(FileId, u32)>, candidates: Vec<FileId> }`, sorted as the CLI
+  prints.
+
+### Modes (tui/app.rs)
+
+- `Mode::ALL` gains Tags, Unresolved, Orphans, and Recent between Forward
+  and Search.
+- Tags: tag rows fold like folders (`expanded_tags`, by key). An unfolded
+  tag lists its child tags, then its notes. Rows show the count after the
+  name. `enter` on a note opens it.
+- Unresolved: `count  target`, marked `✗` or `?`. `enter` opens
+  `Page::Unresolved(target)` for an unresolved group and
+  `Page::Ambiguous(target)` for an ambiguous one. The ambiguous page lists
+  the candidates, pick first, then `Referenced from:`, all followable.
+- Orphans: paths, sorted. `enter` opens.
+- Recent: every visible note, newest first, as `age  path`. Age is the
+  largest whole unit of the time since mtime: `42s`, `5m`, `3h`, `2d`,
+  `6w`, `14mo`, `2y`. No clock or timezone crate is needed.
+- All four rebuild on refresh, like the Tree.
+
+### Header (tui/ui.rs)
+
+Measure the full mode list; when it and the root label do not fit the
+width, show `◂ Mode ▸` for the current mode only.
+
+### CLI
+
+- `knapp orphans [--root]`: one root-relative path per line, sorted.
+- `knapp tags [--root]`: `COUNT<TAB>TAG` per tag, every level, as shown,
+  sorted by name without regard to case, parents before children.
+- `cli::unresolved` prints from `Index::unresolved`; its output is
+  unchanged.
+
+### Expected output
+
+`scripts/expected.py` gains `TAGS`, each note's tags by hand, in the style
+of `LINKS`, and writes `<fixture>.tags.txt` from it and
+`<fixture>.orphans.txt` from its own backlinks. `tests/cli.rs` runs
+`orphans` and `tags` on every fixture. These land in the same change, since
+an expected file with no test is an error in `tests/cli.rs`.
+
+### Tests
+
+- `tests/cli.rs`: the new expected files.
+- `tests/index.rs`: tag case folding and most-used spelling, parent counts
+  with a note counted once across two child tags, orphans ignoring
+  self-links and excluded files.
+- `tests/pane.rs`: tab order, unfolding a tag and opening a note from it,
+  the ambiguous page on `vault-ambiguous`, Recent ordering after touching a
+  file, and the one-mode header at 40 columns.
+- `age()` for each unit boundary.
+
+### In herdr
+
+Link and open the pane on a scratch copy of a fixture:
+
+1. `tab` through every mode; the header fits the split.
+2. Tags: unfold a nested tag and open a note from it.
+3. Unresolved: open an ambiguous target and follow a candidate.
+4. Edit a note in another pane: it moves to the top of Recent.
 
 ## Step 6: send
 
