@@ -271,7 +271,8 @@ def generate(out):
                     f.write(f"{source}:{line}\t{text}\n")
 
         groups = {}
-        for r in records:
+        # sorted() is stable: path order, then each note's link order.
+        for r in sorted(records, key=lambda r: r["source"]):
             if r["state"] != "resolved":
                 group = (r["state"], key(r["target"]).removesuffix(".md"))
                 groups.setdefault(group, [0, r["target"]])[0] += 1

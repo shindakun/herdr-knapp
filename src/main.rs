@@ -1,14 +1,13 @@
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: knapp <command>
-
-commands:
-  help       show this message
-  version    print the version";
+use knapp::cli::{self, USAGE};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
+        Some("links") => cli::links(&args[1..]),
+        Some("backlinks") => cli::backlinks(&args[1..]),
+        Some("unresolved") => cli::unresolved(&args[1..]),
         None | Some("--help" | "-h" | "help") => {
             println!("{USAGE}");
             Ok(())

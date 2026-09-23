@@ -7,7 +7,8 @@ graph. It never writes a note.
 
 ## Layout
 
-- `src/main.rs` dispatches argv; everything else is in the library.
+- `src/main.rs` dispatches argv; `src/cli.rs` holds the subcommands;
+  everything else is in the library.
 - `src/config.rs` reads the config file and resolves roots.
 - `src/scan.rs` walks a root, applies excludes, and splits notes from
   attachments.

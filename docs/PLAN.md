@@ -389,6 +389,7 @@ Cargo.toml
 herdr-plugin.toml
 src/
   main.rs       argv dispatch
+  cli.rs        subcommands
   lib.rs        module list
   config.rs     config file, root resolution
   scan.rs       walk the tree, respect exclude, notes and attachments
@@ -430,6 +431,7 @@ file.
 ## Order
 
 1. `scan`, `parse`, `index`. `links`, `backlinks`, `unresolved` on the CLI.
+   Built.
 2. Cache, stat sweep, watcher.
 3. Pane: tree, detail, backlinks, forward, link following, history. The
    `notes` pane entry in the manifest.

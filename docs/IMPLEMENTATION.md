@@ -38,7 +38,8 @@ pub struct Parsed {
 }
 
 pub struct Link {
-    pub kind: LinkKind,               // Wiki, Embed, Markdown, Property
+    pub kind: LinkKind,               // Link, Embed, Property
+    pub markdown: bool,               // `[text](path)` form
     pub written: String,              // source text of the link, for output
     pub target: String,               // path part, decoded, `\` stripped
     pub fragment: Option<String>,     // after the first `#`, without it
@@ -52,7 +53,7 @@ pub enum Value { Str(String), List(Vec<String>), Date(String), Bool(bool), Raw(S
 pub struct Index {
     pub root: PathBuf,
     pub files: Vec<File>,                     // FileId is the position
-    by_path: HashMap<String, FileId>,         // key(rel path)
+    by_path: HashMap<String, FileId>,         // key(rel path), extension kept
     by_name: HashMap<String, Vec<FileId>>,    // key(file name), extension kept
     pub forward: Vec<Vec<Resolved>>,          // per note, parallel to Parsed.links
     pub back: Vec<Vec<(FileId, usize)>>,      // (source note, link position)
@@ -75,7 +76,15 @@ files, and non-UTF-8 notes).
 ## Step 1: scan, parse, index, first CLI commands
 
 Dependencies for this step: `pulldown-cmark`, `unicode-normalization`,
-`serde`, `serde_json`.
+`serde`, `serde_json`, `toml`.
+
+### config.rs
+
+The config file as the plan describes it, with `deny_unknown_fields`, so a
+top-level key written after a `[[root]]` fails with its name instead of
+landing in that root. `pick_root` implements the CLI's root choice. Tests
+set `XDG_CONFIG_HOME` to an empty directory so a user's own config cannot
+change their results.
 
 ### scan.rs
 
@@ -108,13 +117,15 @@ pulldown-cmark 0.13.4 does with Obsidian syntax:
 | `%%[[a]]%%` | a normal link; comments are not recognized |
 | `---` frontmatter | `MetadataBlock(YamlStyle)` with its byte range |
 
-So `parse` runs two passes:
+So `parse` runs two passes over the unchanged text:
 
-1. Parse once and collect the byte ranges of `Code` and `CodeBlock`. Then
-   scan for `%%` outside those ranges, pairing them in order, and overwrite
-   each `%%...%%` region with spaces, keeping newlines, so offsets and line
-   numbers stay valid. An unpaired `%%` masks to the end of the file.
-2. Parse the masked text and walk the events:
+1. Collect the byte ranges of `Code` and `CodeBlock`, then the comment
+   ranges: `%%` marks outside code, paired in order. An unpaired `%%` runs
+   to the end of the file. Comments are not blanked out, since that changes
+   block structure: a line starting with `%%x%%` would become four spaces
+   and an indented code block.
+2. Walk the events, dropping any link, tag, heading, or block id that starts
+   inside a comment:
    - Wiki `Link` / `Image`: strip one trailing `\` from `dest_url`, then
      split at the first `#`. The alias is the source text between `|` and
      `]]`. An empty target (`[[#h]]`) links to the same note.
