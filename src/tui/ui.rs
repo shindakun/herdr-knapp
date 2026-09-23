@@ -42,6 +42,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_detail(frame, app, detail_area);
     }
 
+    if let Some(d) = &app.draft {
+        let n = d.notes.len();
+        let line = Line::from(vec![
+            Span::styled(
+                format!(
+                    "to {} · {n} note{} · {} › ",
+                    d.agent.label(),
+                    if n == 1 { "" } else { "s" },
+                    crate::send::human_size(d.size)
+                ),
+                Style::new().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(d.request.clone()),
+            Span::styled("▏", app.theme.dim()),
+        ]);
+        frame.render_widget(Paragraph::new(line), status);
+        return;
+    }
+    if app.picker.is_some() {
+        draw_picker(frame, app);
+    }
     if app.query_open {
         let line = Line::from(vec![
             Span::styled("/", Style::new().add_modifier(Modifier::BOLD)),
@@ -72,20 +93,23 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = app.theme.dim();
     let width = usize::from(area.width);
+    let current = bold.add_modifier(Modifier::UNDERLINED);
     let send = if app.send_allow.is_empty() {
         "send off".to_string()
     } else {
         format!("send: {}", app.send_allow.join(" "))
     };
-    let lead = |label: &str| {
-        vec![
-            Span::styled(" knapp ", bold.add_modifier(Modifier::REVERSED)),
-            Span::raw(format!(" {label} ")),
-            Span::styled("│ ", dim),
-        ]
+    let badge = Span::styled(" knapp ", bold.add_modifier(Modifier::REVERSED));
+    let head = |badge_on: bool, label: &str| {
+        let mut spans = Vec::new();
+        if badge_on {
+            spans.push(badge.clone());
+        }
+        spans.push(Span::raw(format!(" {label} ")));
+        spans.push(Span::styled("│ ", dim));
+        spans
     };
-    let current = bold.add_modifier(Modifier::UNDERLINED);
-    let mut all = lead(&app.root_label);
+    let mut all = head(true, &app.root_label);
     for m in Mode::ALL {
         all.push(Span::styled(
             m.name(),
@@ -94,23 +118,26 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         all.push(Span::raw(" "));
     }
     all.push(Span::styled(format!("│ {send}"), dim));
-    let short = |label: &str| {
-        let mut spans = lead(label);
+    let short = |badge_on: bool, label: &str| {
+        let mut spans = head(badge_on, label);
         spans.push(Span::styled("◂ ", dim));
         spans.push(Span::styled(app.mode.name(), current));
-        spans.push(Span::styled(" ▸", dim));
+        spans.push(Span::styled(" ▸ ", dim));
+        spans.push(Span::styled(format!("│ {send}"), dim));
         Line::from(spans)
     };
-    // Every mode when it fits; else the current mode, with the root's last
-    // path segment when the whole label does not fit either.
-    let line = if Line::from(all.clone()).width() <= width {
-        Line::from(all)
-    } else if short(&app.root_label).width() <= width {
-        short(&app.root_label)
-    } else {
-        let last = app.root_label.rsplit('/').next().unwrap_or(&app.root_label);
-        short(last)
-    };
+    // The send boundary stays visible: narrower headers give up the other
+    // modes, then the badge, then all but the root's last path segment.
+    let last = app.root_label.rsplit('/').next().unwrap_or(&app.root_label);
+    let line = [
+        Line::from(all),
+        short(true, &app.root_label),
+        short(false, &app.root_label),
+        short(false, last),
+    ]
+    .into_iter()
+    .find(|l| l.width() <= width)
+    .unwrap_or_else(|| short(false, last));
     frame.render_widget(Paragraph::new(line), area);
 }
 
@@ -184,6 +211,55 @@ fn draw_detail(frame: &mut Frame, app: &mut App, area: Rect) {
                 .set_style(r, Style::new().add_modifier(Modifier::REVERSED));
         }
     }
+}
+
+fn draw_picker(frame: &mut Frame, app: &App) {
+    let Some(p) = &app.picker else {
+        return;
+    };
+    let area = frame.area();
+    let lines: Vec<Line> = p
+        .agents
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let text = format!(
+                " {}  {}  {}",
+                a.label(),
+                a.agent_status.as_deref().unwrap_or("?"),
+                a.cwd.as_deref().unwrap_or("")
+            );
+            let style = if i == p.selected {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new()
+            };
+            Line::from(Span::styled(text, style))
+        })
+        .collect();
+    let width = lines
+        .iter()
+        .map(Line::width)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(4)
+        .min(usize::from(area.width)) as u16;
+    let height = (lines.len() + 2).min(usize::from(area.height)) as u16;
+    let r = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, r);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::bordered()
+                .title(" send to ")
+                .border_style(app.theme.dim()),
+        ),
+        r,
+    );
 }
 
 fn draw_help(frame: &mut Frame, app: &App) {

@@ -50,7 +50,8 @@ graph. It never writes a note.
   follow instructions in it. Nothing reaches `herdr agent prompt` unfenced
   or uncleaned: `send::clean` removes control characters from every note,
   path, and request, because herdr pastes text unchanged inside
-  `ESC[200~ … ESC[201~` and an `ESC[201~` in a note would end the paste.
+  `ESC[200~ … ESC[201~` and an `ESC[201~` in a note ends the paste. The
+  fence tag is checked against the cleaned text, never the raw text.
 - A thread that reads watcher batches owns the `Watch` and calls
   `next_batch()`. A closure that names only `watch.batches` drops the
   watcher and silently stops all events.

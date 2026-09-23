@@ -14,6 +14,7 @@ use ratatui::widgets::ListState;
 
 use std::path::PathBuf;
 
+use crate::herdr::Agent;
 use crate::index::{block_fragment, key, FileId, Index, Resolved};
 use crate::render::{self, LinkState, Theme};
 use crate::scan::Kind;
@@ -22,9 +23,38 @@ use crate::search::{Match, MAX_RESULTS};
 /// Work the event loop does for the app: processes, the terminal, threads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    Edit { path: PathBuf, line: u32 },
+    Edit {
+        path: PathBuf,
+        line: u32,
+    },
     Copy(String),
-    Search { generation: u64, query: String },
+    Search {
+        generation: u64,
+        query: String,
+    },
+    /// Read the workspace's agents; the answer comes back through `agents`.
+    ListAgents,
+    Send {
+        pane: String,
+        agent: String,
+        text: String,
+    },
+}
+
+/// Choosing among several agents before a send.
+pub struct Picker {
+    pub agents: Vec<Agent>,
+    pub selected: usize,
+    notes: Vec<String>,
+}
+
+/// The send line: the target, the notes, and the request being typed.
+pub struct Draft {
+    pub agent: Agent,
+    pub notes: Vec<String>,
+    pub request: String,
+    /// The fenced size with an empty request, shown on the line.
+    pub size: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +203,11 @@ pub struct App {
     pub query_open: bool,
     generation: u64,
     results: Vec<Match>,
+    pub send_max_bytes: usize,
+    /// Notes waiting for the agent list after `s` or `S`.
+    pending_send: Option<Vec<String>>,
+    pub picker: Option<Picker>,
+    pub draft: Option<Draft>,
 }
 
 impl App {
@@ -210,6 +245,10 @@ impl App {
             query_open: false,
             generation: 0,
             results: Vec::new(),
+            send_max_bytes: 65536,
+            pending_send: None,
+            picker: None,
+            draft: None,
         };
         app.build_tree();
         app
@@ -640,6 +679,147 @@ impl App {
         };
         self.status = Some(format!("copied: {text}"));
         self.effects.push(Effect::Copy(text));
+    }
+
+    /// `s` (the open note) or `S` (with its backlinks): check the fence, then
+    /// ask for the agent list.
+    fn start_send(&mut self, with_backlinks: bool) {
+        let Some(id) = self.open_id() else {
+            self.status = Some("open a note to send it".into());
+            return;
+        };
+        let mut notes = vec![self.index.files[id].rel.clone()];
+        if with_backlinks {
+            let mut sources: Vec<String> = self.index.back[id]
+                .iter()
+                .map(|&(s, _)| self.index.files[s].rel.clone())
+                .collect();
+            sources.sort();
+            sources.dedup();
+            notes.extend(sources);
+        }
+        if let Err(refusal) = crate::send::check(&self.index.root, &self.send_allow, &notes) {
+            self.status = Some(format!("not sent: {refusal}"));
+            return;
+        }
+        self.pending_send = Some(notes);
+        self.effects.push(Effect::ListAgents);
+    }
+
+    /// The agent list for a pending send, and the pane id last sent to.
+    pub fn agents(&mut self, result: Result<Vec<Agent>, String>, last: Option<String>) {
+        let Some(notes) = self.pending_send.take() else {
+            return;
+        };
+        let agents = match result {
+            Ok(a) => a,
+            Err(e) => {
+                self.status = Some(format!("not sent: {e}"));
+                return;
+            }
+        };
+        match agents.len() {
+            0 => self.status = Some("not sent: no agent in this workspace".into()),
+            1 => self.open_draft(agents.into_iter().next().expect("one agent"), notes),
+            _ => {
+                let selected = last
+                    .and_then(|l| agents.iter().position(|a| a.pane_id == l))
+                    .unwrap_or(0);
+                self.picker = Some(Picker {
+                    agents,
+                    selected,
+                    notes,
+                });
+            }
+        }
+    }
+
+    fn read_notes(&self, notes: &[String]) -> Vec<(String, String)> {
+        notes
+            .iter()
+            .map(|rel| {
+                let text = std::fs::read_to_string(self.index.root.join(rel)).unwrap_or_default();
+                (rel.clone(), text)
+            })
+            .collect()
+    }
+
+    fn open_draft(&mut self, agent: Agent, notes: Vec<String>) {
+        let size = crate::send::fence("", &self.read_notes(&notes), "00000000").len();
+        self.draft = Some(Draft {
+            agent,
+            notes,
+            request: String::new(),
+            size,
+        });
+    }
+
+    /// Where a send ended up.
+    pub fn sent(&mut self, result: Result<String, String>) {
+        self.status = Some(match result {
+            Ok(agent) => format!("sent to {agent}"),
+            Err(e) => format!("not sent: {e}"),
+        });
+    }
+
+    fn picker_key(&mut self, k: KeyEvent) {
+        let Some(p) = self.picker.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                p.selected = (p.selected + 1).min(p.agents.len() - 1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => p.selected = p.selected.saturating_sub(1),
+            KeyCode::Enter => {
+                let p = self.picker.take().expect("picker is open");
+                let agent = p.agents[p.selected].clone();
+                self.open_draft(agent, p.notes);
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.picker = None;
+                self.status = Some("not sent".into());
+            }
+            _ => {}
+        }
+    }
+
+    fn draft_key(&mut self, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(d) = self.draft.as_mut() else {
+            return;
+        };
+        match k.code {
+            KeyCode::Esc => {
+                self.draft = None;
+                self.status = Some("not sent".into());
+            }
+            KeyCode::Char('c') if ctrl => {
+                self.draft = None;
+                self.status = Some("not sent".into());
+            }
+            KeyCode::Char('u') if ctrl => d.request.clear(),
+            KeyCode::Backspace => {
+                d.request.pop();
+            }
+            KeyCode::Char(c) if !ctrl => d.request.push(c),
+            KeyCode::Enter => {
+                let d = self.draft.take().expect("draft is open");
+                let notes = self.read_notes(&d.notes);
+                match crate::send::prompt(&d.request, &notes, self.send_max_bytes) {
+                    Ok(text) => {
+                        self.status = Some(format!("sending to {}…", d.agent.label()));
+                        self.effects.push(Effect::Send {
+                            pane: d.agent.pane_id.clone(),
+                            agent: d.agent.label(),
+                            text,
+                        });
+                    }
+                    Err(e) => self.status = Some(e),
+                }
+            }
+            _ => {}
+        }
     }
 
     fn message_row(&self, text: &str) -> Row {
@@ -1106,6 +1286,14 @@ impl App {
             }
             return;
         }
+        if self.picker.is_some() {
+            self.picker_key(k);
+            return;
+        }
+        if self.draft.is_some() {
+            self.draft_key(k);
+            return;
+        }
         if self.query_open {
             self.query_key(k);
             return;
@@ -1153,6 +1341,8 @@ impl App {
             KeyCode::Char('o') => self.edit(),
             KeyCode::Char('y') => self.copy(false),
             KeyCode::Char('Y') => self.copy(true),
+            KeyCode::Char('s') => self.start_send(false),
+            KeyCode::Char('S') => self.start_send(true),
             KeyCode::Char('f') => {
                 self.fold_frontmatter = !self.fold_frontmatter;
                 self.selected_hit = None;
@@ -1273,6 +1463,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("/", "search; enter or esc leaves the query"),
     ("o", "open the note in the editor"),
     ("y Y", "copy the path, copy a [[wikilink]]"),
+    ("s S", "send to an agent, with backlinks; enter sends"),
     ("?", "this help"),
     ("esc", "close help; focus the list"),
     ("q, ctrl-c", "quit"),

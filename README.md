@@ -5,9 +5,9 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 to 5 of `docs/PLAN.md` are built: the link index, its
+Status: steps 1 to 6 of `docs/PLAN.md` are built: the link index, its
 cache and watcher, the CLI, and the notes pane with editing, search, tags,
-unresolved links, orphans, and recent notes. The `open` action and its
+unresolved links, orphans, recent notes, and sending notes to an agent. The `open` action and its
 keybinding come in a later step; until then, open the pane with:
 
 ```sh
@@ -32,6 +32,15 @@ the pane shows one side at a time; `h` / `l` switch.
   terminal's clipboard (OSC 52), which works over SSH under Herdr.
 - `/` searches the notes as you type, with `rg` when it is on `PATH`.
   Results are notes the tree shows; `.gitignore` does not hide any.
+- `s` sends the open note to an agent in the workspace, and `S` sends it
+  with the notes that link to it. A send line shows the target and size;
+  type your request and press `enter`, or `esc` to cancel. The notes go
+  fenced in XML with a line telling the agent they are data, not
+  instructions, and control characters removed.
+
+Sending is off until the root has `send_allow`, the path prefixes that may
+leave the pane. Anything outside them is refused, including symlinks and
+`..` paths that lead outside. The header always shows the prefixes.
 
 The pane opens on the workspace's notes: the directory of the workspace's
 agent, or a configured root that contains it. It follows changes on disk
@@ -86,6 +95,7 @@ editor = "nvim"
 [[root]]
 name = "notes"
 path = "~/notes"
+send_allow = ["shared/"]
 ```
 
 Top-level keys go before the first `[[root]]`. Files and folders whose

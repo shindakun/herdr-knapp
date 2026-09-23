@@ -411,10 +411,18 @@ fn narrow_header_keeps_the_mode_visible() {
     p.keys("\t\t\t");
     let header = p.draw()[0].clone();
     assert!(header.contains("◂ Tags ▸"), "{header}");
+    assert!(header.ends_with("│ send off"), "{header}");
     assert!(
         unicode_width::UnicodeWidthStr::width(header.as_str()) <= 40,
         "{header}"
     );
+
+    // With send_allow, the prefixes stay in a 36-column header.
+    let mut p = allowed_pane(&fixture("vault-basic"));
+    p.term = Terminal::new(TestBackend::new(36, 10)).unwrap();
+    p.app.send_allow = vec!["notes/".into()];
+    let header = p.draw()[0].clone();
+    assert!(header.contains("│ send: notes/"), "{header}");
 }
 
 #[test]
@@ -431,4 +439,117 @@ fn the_open_note_shows_a_prose_edit() {
     p.app.batch(&BTreeSet::from(["alpha.md".to_string()]));
     assert!(p.screen().contains("More prose"), "{}", p.screen());
     std::fs::remove_dir_all(root).ok();
+}
+
+fn agent(pane: &str, name: &str) -> knapp::herdr::Agent {
+    serde_json::from_value(serde_json::json!({
+        "pane_id": pane, "workspace_id": "w1", "agent": name, "agent_status": "idle"
+    }))
+    .unwrap()
+}
+
+#[test]
+fn send_is_refused_without_send_allow() {
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 20);
+    p.keys("j\ns"); // alpha.md
+    assert!(p.app.take_effects().is_empty());
+    let screen = p.screen();
+    assert!(screen.contains("not sent: sending is off"), "{screen}");
+}
+
+fn allowed_pane(root: &Path) -> Pane {
+    let (index, _) = Index::load(root, &[], None).unwrap();
+    let app = App::new(
+        index,
+        "test".into(),
+        vec!["".into()],
+        Theme { color: false },
+    );
+    let mut p = Pane {
+        app,
+        term: Terminal::new(TestBackend::new(100, 20)).unwrap(),
+    };
+    p.draw();
+    p
+}
+
+#[test]
+fn send_line_with_one_agent_then_enter() {
+    let mut p = allowed_pane(&fixture("vault-basic"));
+    p.keys("j\ns"); // alpha.md
+    assert_eq!(p.app.take_effects(), [Effect::ListAgents]);
+    p.app.agents(Ok(vec![agent("w1:p2", "claude")]), None);
+    let screen = p.screen();
+    assert!(screen.contains("to claude w1:p2 · 1 note · "), "{screen}");
+
+    p.keys("what next?\n");
+    let effects = p.app.take_effects();
+    let [Effect::Send { pane, agent, text }] = effects.as_slice() else {
+        panic!("{effects:?}");
+    };
+    assert_eq!((pane.as_str(), agent.as_str()), ("w1:p2", "claude w1:p2"));
+    assert!(
+        text.starts_with("what next?\n\nThe notes below are reference data"),
+        "{text}"
+    );
+    assert!(text.contains(" path=\"alpha.md\">\n# Alpha"), "{text}");
+    p.app.sent(Ok("claude w1:p2".into()));
+    assert!(p.screen().contains("sent to claude w1:p2"));
+}
+
+#[test]
+fn esc_cancels_and_capital_s_adds_backlinks() {
+    let mut p = allowed_pane(&fixture("vault-basic"));
+    p.keys("j\ns");
+    p.app.take_effects();
+    p.app.agents(Ok(vec![agent("w1:p2", "claude")]), None);
+    p.key(KeyCode::Esc);
+    assert!(p.app.take_effects().is_empty());
+    assert!(p.screen().contains("not sent"));
+
+    p.keys("S");
+    p.app.take_effects();
+    p.app.agents(Ok(vec![agent("w1:p2", "claude")]), None);
+    assert!(p.screen().contains("· 3 notes ·"), "{}", p.screen());
+    p.keys("\n");
+    let Some(Effect::Send { text, .. }) = p.app.take_effects().pop() else {
+        panic!("no send");
+    };
+    let paths: Vec<&str> = text
+        .match_indices(" path=\"")
+        .map(|(i, _)| {
+            let rest = &text[i + 7..];
+            &rest[..rest.find('"').unwrap()]
+        })
+        .collect();
+    assert_eq!(paths, ["alpha.md", "beta.md", "index.md"]);
+}
+
+#[test]
+fn several_agents_open_a_picker_at_the_last_one() {
+    let mut p = allowed_pane(&fixture("vault-basic"));
+    p.keys("j\ns");
+    p.app.take_effects();
+    p.app.agents(
+        Ok(vec![agent("w1:p2", "claude"), agent("w1:p5", "codex")]),
+        Some("w1:p5".into()),
+    );
+    let screen = p.screen();
+    assert!(
+        screen.contains("send to") && screen.contains("codex w1:p5"),
+        "{screen}"
+    );
+    assert_eq!(p.app.picker.as_ref().unwrap().selected, 1);
+    p.keys("k\n");
+    assert!(p.screen().contains("to claude w1:p2"), "{}", p.screen());
+
+    p.key(KeyCode::Esc);
+    p.keys("s");
+    p.app.take_effects();
+    p.app.agents(Ok(Vec::new()), None);
+    assert!(p.screen().contains("no agent in this workspace"));
+    p.keys("s");
+    p.app.take_effects();
+    p.app.agents(Err("sending needs herdr".into()), None);
+    assert!(p.screen().contains("not sent: sending needs herdr"));
 }

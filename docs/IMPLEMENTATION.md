@@ -728,10 +728,16 @@ pub fn valid_pane_id(id: &str) -> bool;    // w[A-Za-z0-9]+:p[A-Za-z0-9]+
   U+009F), after turning `\r\n` into `\n`. It runs on the request, every
   path, and every note text. Herdr (0.9.1, `src/pane.rs` `paste_payload`)
   wraps paste text in `ESC[200~ … ESC[201~` without changing it on macOS
-  and Linux, so an unclean `ESC[201~` ends the paste early.
+  and Linux. Sent unclean to Claude Code, a note with `ESC[201~` and a
+  newline ends the paste, and the lines after it arrive as a separate,
+  unfenced user message.
 - `fence` writes the request (if any) and a blank line, the preamble line,
-  then one `<knapp-note-SUFFIX path="...">` element per note. The caller
-  draws a new suffix while any note text contains `knapp-note-SUFFIX`.
+  then one `<knapp-note-SUFFIX path="...">` element per note.
+- `prompt(request, notes, max)` cleans the notes, then draws a suffix that
+  no cleaned note contains as `knapp-note-SUFFIX`. The check must run on
+  the cleaned text: cleaning removes characters, so `knapp-note-\x01…` in a
+  raw note becomes the tag. `prompt_with` and `unused_suffix_from` take the
+  draws as a closure so tests can make them known.
 - The size check runs on the final text.
 - `/dev/urandom` read failures refuse the send; there is no fallback to a
   predictable suffix.
@@ -757,10 +763,13 @@ pub fn valid_pane_id(id: &str) -> bool;    // w[A-Za-z0-9]+:p[A-Za-z0-9]+
   The line shows `to <agent> <pane> · <n> notes · <size> ›` and the request.
 - `S`'s notes: the open note, then the distinct sources of its backlinks in
   path order.
-- The loop runs `herdr agent prompt <pane> <text>` in a thread and sends
-  back `AppEvent::Sent(Result<(), String>)`: `sent to <agent>` or herdr's
-  error (such as `agent_blocked`) on the status line. On success it writes
-  `last-agent`.
+- `App` asks for agents with `Effect::ListAgents` and gets them through
+  `App::agents(result, last)`, since it does no process work itself.
+- The loop runs `herdr agent prompt <pane> <text>` (`herdr::prompt`) in a
+  thread and sends back `AppEvent::Sent(Result<String, String>)`:
+  `sent to <agent>` or herdr's error (such as `agent_blocked`) on the
+  status line; `herdr::error_message` turns herdr's JSON error into
+  `code: message`. On success it writes `last-agent`.
 
 ### Tests
 
@@ -770,7 +779,9 @@ pub fn valid_pane_id(id: &str) -> bool;    // w[A-Za-z0-9]+:p[A-Za-z0-9]+
   on Linux CI), a prefix that names a file, a missing prefix, `S` with one
   outside backlink, an oversize send, a note containing `</knapp-note-`, a
   note containing `ESC[201~` and `\r\n` (gone, and newlines kept), a path
-  with `&<>"`, and pane ids that pass and fail.
+  with `&<>"`, pane ids that pass and fail, and a note holding the first
+  drawn tag split by a control character (the draw is skipped).
+- The narrow header keeps `send:` at 36 columns.
 - `tests/pane.rs`: `s` with no `send_allow` refuses with the paths; with
   one agent, the send line opens with the target and size; typing a request
   and `enter` push one `Effect::Send` whose text starts with the request and

@@ -316,14 +316,15 @@ be handed any file in it will eventually be handed the wrong one.
 - The note path and each prefix (joined to the root) are canonicalized, then
   compared by whole components. `..` and symlinks that leave a prefix are
   refused, and `notes/` allows `notes/a.md`, not `notes-private/a.md`.
-  Canonicalization returns the on-disk case, so `Notes/a.md` on a
-  case-insensitive filesystem matches the `notes/` prefix only when the
-  directory is really named `notes`. A prefix that does not exist allows
-  nothing. A prefix may name a single file (`README.md`).
+  A prefix matches the directory it names on disk: on a case-insensitive
+  filesystem `notes/` and `Notes/` are one directory, so both spellings
+  pass; on a case-sensitive one they are two. A prefix that does not exist
+  allows nothing. A prefix may name a single file (`README.md`).
 - A refused send names the refused paths. `S` is all or nothing: one backlink
   outside the fence refuses the whole send.
 - The pane header shows the allowed prefixes, so the boundary is visible
-  while browsing.
+  while browsing. A narrow header drops the other modes, the badge, and all
+  but the root's last folder before it drops them.
 - Browsing is never restricted. The fence is on the way out, not the way in.
 
 ## Config
@@ -537,6 +538,7 @@ file.
 5. Tags, Unresolved, Orphans, and Recent modes; `knapp tags` and
    `knapp orphans`. Built.
 6. `send` with the allowlist and agent picker. Tests before the key binding.
+   Built.
 7. Graph: tree fallback, then the graphics frame. PNG embeds in the detail
    panel.
 8. `open-pane`, `peek-selection`, the link handler, and the peek popup, with

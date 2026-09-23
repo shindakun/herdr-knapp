@@ -31,6 +31,21 @@ pub struct Agent {
     pub focused: bool,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// The agent's kind, such as `claude` or `codex`.
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub agent_status: Option<String>,
+}
+
+impl Agent {
+    pub fn label(&self) -> String {
+        format!(
+            "{} {}",
+            self.agent.as_deref().unwrap_or("agent"),
+            self.pane_id
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -56,9 +71,29 @@ fn herdr(args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|e| format!("{bin}: {e}"))?;
     if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        return Err(error_message(&String::from_utf8_lossy(&out.stderr)));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Herdr prints errors as `{"error": {"code", "message"}}` on stderr.
+pub fn error_message(stderr: &str) -> String {
+    let parsed: Option<serde_json::Value> = serde_json::from_str(stderr.trim()).ok();
+    match parsed.as_ref().and_then(|v| v.get("error")) {
+        Some(e) => {
+            let code = e.get("code").and_then(|c| c.as_str()).unwrap_or("error");
+            let message = e.get("message").and_then(|m| m.as_str()).unwrap_or("");
+            format!("{code}: {message}")
+        }
+        None => stderr.trim().to_string(),
+    }
+}
+
+/// `herdr agent prompt <pane> <text>`: pastes and submits. The text goes as
+/// one plain argument; herdr's parser takes it as the prompt even when it
+/// starts with `-`, and `--` would break it.
+pub fn prompt(pane: &str, text: &str) -> Result<(), String> {
+    herdr(&["agent", "prompt", pane, text]).map(drop)
 }
 
 pub fn agents() -> Result<Vec<Agent>, String> {

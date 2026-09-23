@@ -10,6 +10,9 @@
 - Notes pane: tree, rendered note, backlinks, and forward links, with link
   following, history, a folded frontmatter table, mouse, and a narrow
   layout. It updates as files change.
+- `s` / `S` send the open note, or it and its backlinks, to a workspace
+  agent through a send line, fenced as data, with control characters
+  removed. `send_allow` sets which paths may be sent.
 - Tags, Unresolved, Orphans, and Recent modes, and the `orphans` and
   `tags` commands. `unresolved --json` shows where each ambiguous link
   goes.

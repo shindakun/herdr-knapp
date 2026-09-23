@@ -30,6 +30,23 @@ enum AppEvent {
     Term(Event),
     Batch(std::collections::BTreeSet<String>),
     Results(u64, Vec<Match>),
+    Agents(Result<Vec<crate::herdr::Agent>, String>, Option<String>),
+    Sent(Result<String, String>),
+}
+
+/// `HERDR_PLUGIN_STATE_DIR/last-agent`: the pane id last sent to.
+fn last_agent_path() -> Option<PathBuf> {
+    var("HERDR_PLUGIN_STATE_DIR").map(|d| PathBuf::from(d).join("last-agent"))
+}
+
+/// The workspace's agents with herdr-shaped pane ids.
+fn workspace_agents() -> Result<Vec<crate::herdr::Agent>, String> {
+    let ctx = crate::herdr::Context::from_env().ok_or("sending needs herdr")?;
+    let workspace = ctx.workspace_id.ok_or("herdr gave no workspace id")?;
+    Ok(crate::herdr::agents()?
+        .into_iter()
+        .filter(|a| a.workspace_id == workspace && crate::send::valid_pane_id(&a.pane_id))
+        .collect())
 }
 
 fn var(name: &str) -> Option<String> {
@@ -113,6 +130,7 @@ fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
     );
     let mut app = App::new(index, label, root.send_allow, theme);
     app.status = status;
+    app.send_max_bytes = config.send_max_bytes;
     Ok(Loaded {
         app,
         cache,
@@ -209,6 +227,8 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
             AppEvent::Term(_) => {}
             AppEvent::Batch(b) => app.batch(&b),
             AppEvent::Results(generation, batch) => app.results(generation, batch),
+            AppEvent::Agents(result, last) => app.agents(result, last),
+            AppEvent::Sent(result) => app.sent(result),
         }
         for effect in app.take_effects() {
             match effect {
@@ -219,6 +239,27 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
                     if let Err(e) = result {
                         app.status = Some(format!("editor: {e}"));
                     }
+                }
+                Effect::ListAgents => {
+                    let tx = tx.clone();
+                    thread::spawn(move || {
+                        let last = last_agent_path()
+                            .and_then(|p| std::fs::read_to_string(p).ok())
+                            .map(|s| s.trim().to_string());
+                        let _ = tx.send(AppEvent::Agents(workspace_agents(), last));
+                    });
+                }
+                Effect::Send { pane, agent, text } => {
+                    let tx = tx.clone();
+                    thread::spawn(move || {
+                        let result = crate::herdr::prompt(&pane, &text).map(|()| {
+                            if let Some(path) = last_agent_path() {
+                                let _ = std::fs::write(path, &pane);
+                            }
+                            agent
+                        });
+                        let _ = tx.send(AppEvent::Sent(result));
+                    });
                 }
                 Effect::Copy(text) => {
                     let mut out = std::io::stdout();
