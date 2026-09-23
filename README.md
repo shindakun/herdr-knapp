@@ -5,9 +5,9 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: step 1 of `docs/PLAN.md` is built: the link index and three CLI
-commands. The Herdr pane is not built yet, so the manifest has no entry
-points.
+Status: steps 1 and 2 of `docs/PLAN.md` are built: the link index, its
+cache and watcher, and the CLI. The Herdr pane is not built yet, so the
+manifest has no entry points.
 
 ## Use it as a CLI
 
@@ -15,6 +15,7 @@ points.
 knapp links FILE [--root NAME|PATH]
 knapp backlinks FILE [--root NAME|PATH]
 knapp unresolved [--root NAME|PATH] [--json]
+knapp index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
 ```
 
 - `links` prints one line per link in FILE: line, state (`resolved`,
@@ -24,6 +25,9 @@ knapp unresolved [--root NAME|PATH] [--json]
 - `backlinks` prints `source:line` and the linking line for every note that
   links to FILE.
 - `unresolved` counts missing and ambiguous targets across the root.
+- `index` loads the root and prints counts. `--stats` adds timings and
+  cache use, `--rebuild` ignores the cache, and `--watch` keeps running and
+  prints a line for each change to the tree.
 
 Output is tab-separated. Links resolve the way Obsidian does, so a vault's
 links point where its author saw them point. Markdown links resolve
@@ -31,6 +35,10 @@ relative to their note first, as in a docs repo.
 
 The root is `--root`, a configured root that contains FILE or the current
 directory, or else the current directory.
+
+Parsed notes are cached in `~/.cache/knapp/index/` (or
+`$XDG_CACHE_HOME/knapp/index/`), one file per root, so later runs only
+parse what changed. Deleting the cache is always safe.
 
 ## Configure
 

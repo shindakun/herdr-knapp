@@ -434,7 +434,10 @@ tests/
                 size) and fencing (unique tag, escaped path, a note that
                 contains a closing tag)
   cli.rs        each subcommand against fixtures
-  perf.rs       ignored; cold and warm load of 5,000 generated notes
+  cache.rs      cache reuse, bad caches, the two-second rule, refresh
+  watch.rs      watcher batches and ignored paths
+  perf.rs       ignored; cold load, warm load, and refresh of 5,000 notes
+  common/       temp fixture copies with aged mtimes
   expected/     expected CLI output per fixture, from scripts/expected.py
   fixtures/herdr/  captured herdr 0.9.1 JSON for the fake herdr
 ```
@@ -446,7 +449,7 @@ file.
 
 1. `scan`, `parse`, `index`. `links`, `backlinks`, `unresolved` on the CLI.
    Built.
-2. Cache, stat sweep, watcher.
+2. Cache, stat sweep, watcher. Built.
 3. Pane: tree, detail, backlinks, forward, link following, history. The
    `notes` pane entry in the manifest.
 4. `o`, `y`, `Y`. Search.

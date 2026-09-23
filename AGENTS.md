@@ -22,6 +22,8 @@ graph. It never writes a note.
 - `src/herdr.rs` reads the environment Herdr injects and calls the Herdr CLI.
 - `src/send.rs` is the send allowlist.
 - `src/tui/` is the notes pane and the peek popup.
+- `tests/common/` has the temp-copy helpers; copies get old mtimes so the
+  cache's two-second rule does not force reparsing.
 - `fixtures/` are note trees the tests index; `fixtures/README.md` says what
   each one covers. `tests/expected/` is the expected CLI output, written by
   `scripts/expected.py`, which ports Obsidian's link resolution.

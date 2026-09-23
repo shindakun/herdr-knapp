@@ -1,12 +1,22 @@
 //! Forward and back link tables, resolution, and the on-disk cache.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::parse::{self, Link, Parsed};
-use crate::scan::{self, Kind};
+use crate::scan::{self, Entry, Kind};
+
+/// Bump on any change to `Parsed` or to what `parse` extracts.
+pub const CACHE_FORMAT: u32 = 1;
+
+/// A cached parse is not trusted when its file changed this close to the
+/// cache write: a second write in the same mtime tick leaves mtime alone.
+const RACY_NS: u128 = 2_000_000_000;
 
 pub type FileId = usize;
 
@@ -53,10 +63,46 @@ impl Resolved {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct LoadStats {
+    pub reused: usize,
+    pub parsed: usize,
+    /// The cache on disk no longer matches the index.
+    pub stale: bool,
+    pub scan_ms: f64,
+    pub cache_read_ms: f64,
+    pub parse_ms: f64,
+    pub resolve_ms: f64,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CacheFile<P> {
+    format: u32,
+    root: String,
+    written_ns: u128,
+    files: BTreeMap<String, CachedFile<P>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CachedFile<P> {
+    kind: Kind,
+    mtime_ns: u128,
+    size: u64,
+    parsed: Option<P>,
+}
+
 pub struct Index {
     pub root: PathBuf,
     pub files: Vec<File>,
     pub skipped_filters: Vec<String>,
+    exclude: Vec<String>,
     keys: Vec<String>,
     by_path: HashMap<String, FileId>,
     by_name: HashMap<String, Vec<FileId>>,
@@ -78,37 +124,210 @@ fn dirname(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
+fn needs_parse(e: &Entry) -> bool {
+    e.kind == Kind::Note && !e.excluded
+}
+
+fn read_and_parse(root: &Path, rel: &str) -> Option<Parsed> {
+    let bytes = std::fs::read(root.join(rel)).ok()?;
+    String::from_utf8(bytes)
+        .ok()
+        .map(|text| parse::parse(&text))
+}
+
+fn ms(since: Instant) -> f64 {
+    since.elapsed().as_secs_f64() * 1e3
+}
+
+fn now_ns() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos())
+}
+
+/// `<dir>/index/<hex sha256 of the canonical root>.json`
+pub fn cache_path(cache_dir: &Path, canonical_root: &Path) -> PathBuf {
+    let digest = Sha256::digest(canonical_root.to_string_lossy().as_bytes());
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    cache_dir.join("index").join(format!("{hex}.json"))
+}
+
+fn read_cache(path: &Path, root: &Path) -> Option<CacheFile<Parsed>> {
+    let bytes = std::fs::read(path).ok()?;
+    let cache: CacheFile<Parsed> = serde_json::from_slice(&bytes).ok()?;
+    (cache.format == CACHE_FORMAT && cache.root == root.to_string_lossy()).then_some(cache)
+}
+
 impl Index {
-    pub fn load(root: &Path, exclude: &[String]) -> Result<Self, String> {
+    /// Scans `root`, reusing parses from the cache file at `cache` when
+    /// given. Does not write the cache; see `save_cache`.
+    pub fn load(
+        root: &Path,
+        exclude: &[String],
+        cache: Option<&Path>,
+    ) -> Result<(Self, LoadStats), String> {
         let root = std::fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
+        let mut stats = LoadStats::default();
+
+        let t = Instant::now();
         let scan = scan::scan(&root, exclude)?;
-        let files = scan
-            .entries
-            .into_iter()
-            .map(|e| {
-                let parsed = (e.kind == Kind::Note && !e.excluded)
-                    .then(|| std::fs::read(root.join(&e.rel)).ok())
-                    .flatten()
-                    .and_then(|bytes| String::from_utf8(bytes).ok())
-                    .map(|text| parse::parse(&text));
-                File {
-                    rel: e.rel,
-                    kind: e.kind,
-                    excluded: e.excluded,
-                    mtime_ns: e.mtime_ns,
-                    size: e.size,
-                    parsed,
+        stats.scan_ms = ms(t);
+
+        let t = Instant::now();
+        let mut cached = cache.and_then(|p| read_cache(p, &root));
+        stats.cache_read_ms = ms(t);
+        let written_ns = cached.as_ref().map_or(0, |c| c.written_ns);
+        let cached_count = cached.as_ref().map_or(0, |c| c.files.len());
+        stats.stale = cached.is_none() || cached_count != scan.entries.len();
+
+        let t = Instant::now();
+        let mut files = Vec::with_capacity(scan.entries.len());
+        for e in scan.entries {
+            let hit = cached.as_mut().and_then(|c| c.files.remove(&e.rel));
+            let same = hit
+                .as_ref()
+                .is_some_and(|h| h.kind == e.kind && h.mtime_ns == e.mtime_ns && h.size == e.size);
+            let parsed = if !needs_parse(&e) {
+                stats.stale |= !same || hit.is_some_and(|h| h.parsed.is_some());
+                None
+            } else {
+                match hit {
+                    Some(h)
+                        if same
+                            && e.mtime_ns != 0
+                            && e.mtime_ns + RACY_NS < written_ns
+                            && h.parsed.is_some() =>
+                    {
+                        stats.reused += 1;
+                        h.parsed
+                    }
+                    _ => {
+                        stats.parsed += 1;
+                        stats.stale = true;
+                        read_and_parse(&root, &e.rel)
+                    }
                 }
-            })
-            .collect();
-        Ok(Self::from_files(root, files, scan.skipped_filters))
+            };
+            files.push(File {
+                rel: e.rel,
+                kind: e.kind,
+                excluded: e.excluded,
+                mtime_ns: e.mtime_ns,
+                size: e.size,
+                parsed,
+            });
+        }
+        stats.parse_ms = ms(t);
+
+        let t = Instant::now();
+        let index = Self::from_files(root, files, scan.skipped_filters, exclude.to_vec());
+        stats.resolve_ms = ms(t);
+        Ok((index, stats))
     }
 
-    pub fn from_files(root: PathBuf, files: Vec<File>, skipped_filters: Vec<String>) -> Self {
+    /// Writes the cache with a temp file and a rename, so concurrent
+    /// writers never leave a torn file.
+    pub fn save_cache(&self, path: &Path) -> Result<(), String> {
+        let files = self
+            .files
+            .iter()
+            .map(|f| {
+                (
+                    f.rel.clone(),
+                    CachedFile {
+                        kind: f.kind,
+                        mtime_ns: f.mtime_ns,
+                        size: f.size,
+                        parsed: f.parsed.as_ref(),
+                    },
+                )
+            })
+            .collect();
+        let cache = CacheFile {
+            format: CACHE_FORMAT,
+            root: self.root.to_string_lossy().into_owned(),
+            written_ns: now_ns(),
+            files,
+        };
+        let json = serde_json::to_vec(&cache).map_err(|e| e.to_string())?;
+        let dir = path.parent().ok_or("cache path has no directory")?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+        std::fs::write(&tmp, json).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("{}: {e}", path.display())
+        })
+    }
+
+    /// Sweeps the tree again. Notes named in `touched` are reparsed even when
+    /// their mtime and size look unchanged. `None` when nothing changed.
+    pub fn refresh(&mut self, touched: &BTreeSet<String>) -> Result<Option<Change>, String> {
+        let scan = scan::scan(&self.root, &self.exclude)?;
+        let mut old: HashMap<String, File> = std::mem::take(&mut self.files)
+            .into_iter()
+            .map(|f| (f.rel.clone(), f))
+            .collect();
+        let mut change = Change::default();
+        let mut files = Vec::with_capacity(scan.entries.len());
+        for e in scan.entries {
+            let prev = old.remove(&e.rel);
+            let same = prev.as_ref().is_some_and(|p| {
+                p.kind == e.kind
+                    && p.mtime_ns == e.mtime_ns
+                    && p.size == e.size
+                    && p.excluded == e.excluded
+            });
+            let parsed = match prev {
+                Some(p) if same && !(needs_parse(&e) && touched.contains(&e.rel)) => p.parsed,
+                Some(p) => {
+                    let parsed = needs_parse(&e)
+                        .then(|| read_and_parse(&self.root, &e.rel))
+                        .flatten();
+                    if parsed != p.parsed || p.excluded != e.excluded || p.kind != e.kind {
+                        change.modified.push(e.rel.clone());
+                    }
+                    parsed
+                }
+                None => {
+                    change.added.push(e.rel.clone());
+                    needs_parse(&e)
+                        .then(|| read_and_parse(&self.root, &e.rel))
+                        .flatten()
+                }
+            };
+            files.push(File {
+                rel: e.rel,
+                kind: e.kind,
+                excluded: e.excluded,
+                mtime_ns: e.mtime_ns,
+                size: e.size,
+                parsed,
+            });
+        }
+        change.removed = old.into_keys().collect();
+        change.removed.sort();
+        self.files = files;
+        self.skipped_filters = scan.skipped_filters;
+        if change == Change::default() {
+            return Ok(None);
+        }
+        self.build_names();
+        self.resolve_all();
+        Ok(Some(change))
+    }
+
+    pub fn from_files(
+        root: PathBuf,
+        files: Vec<File>,
+        skipped_filters: Vec<String>,
+        exclude: Vec<String>,
+    ) -> Self {
         let mut index = Self {
             root,
             files,
             skipped_filters,
+            exclude,
             keys: Vec::new(),
             by_path: HashMap::new(),
             by_name: HashMap::new(),

@@ -1,10 +1,12 @@
 //! Subcommands.
 
 use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
-use crate::config::Config;
-use crate::index::{key, Fragment, Index, Resolved};
+use crate::config::{self, Config};
+use crate::index::{self, key, Fragment, Index, LoadStats, Resolved};
 use crate::scan::Kind;
 
 pub const USAGE: &str = "usage: knapp <command> [args]
@@ -13,26 +15,29 @@ commands:
   links FILE [--root NAME|PATH]           forward links, with resolution state
   backlinks FILE [--root NAME|PATH]       notes linking to FILE
   unresolved [--root NAME|PATH] [--json]  unresolved and ambiguous targets
+  index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
+                                          load the root and write the cache
   help                                    show this message
   version                                 print the version";
 
+#[derive(Default)]
 struct Args {
     file: Option<String>,
     root: Option<String>,
-    json: bool,
+    flags: BTreeSet<&'static str>,
 }
 
-fn parse_args(args: &[String], wants_file: bool, allows_json: bool) -> Result<Args, String> {
-    let mut out = Args {
-        file: None,
-        root: None,
-        json: false,
-    };
+/// `flags` lists the boolean flags this command accepts, such as `--json`.
+fn parse_args(args: &[String], wants_file: bool, flags: &[&'static str]) -> Result<Args, String> {
+    let mut out = Args::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
+        if let Some(flag) = flags.iter().find(|f| **f == arg) {
+            out.flags.insert(flag);
+            continue;
+        }
         match arg.as_str() {
             "--root" => out.root = Some(it.next().ok_or("--root needs a value")?.clone()),
-            "--json" if allows_json => out.json = true,
             a if a.starts_with('-') => return Err(format!("unknown flag: {a}\n{USAGE}")),
             a if wants_file && out.file.is_none() => out.file = Some(a.to_string()),
             a => return Err(format!("unexpected argument: {a}\n{USAGE}")),
@@ -48,9 +53,17 @@ fn cwd() -> Result<PathBuf, String> {
     std::env::current_dir().map_err(|e| format!("current directory: {e}"))
 }
 
+struct Opened {
+    index: Index,
+    rel: Option<String>,
+    stats: LoadStats,
+    cache: Option<PathBuf>,
+    cache_write_ms: f64,
+}
+
 /// Loads the index for the root that applies to `file` (or the current
-/// directory) and returns it with `file`'s root-relative path.
-fn open(args: &Args) -> Result<(Index, Option<String>), String> {
+/// directory), writing the cache when it went stale.
+fn open(args: &Args) -> Result<Opened, String> {
     let cwd = cwd()?;
     let config = Config::load()?;
     let file = args.file.as_deref().map(|f| cwd.join(f));
@@ -64,12 +77,33 @@ fn open(args: &Args) -> Result<(Index, Option<String>), String> {
         .and_then(Path::parent)
         .map_or_else(|| cwd.clone(), Path::to_path_buf);
     let root = config.pick_root(args.root.as_deref(), &inside, &cwd)?;
-    let index = Index::load(&root.path, &config.exclude)?;
+    let canonical = config::canonical(&root.path);
+    let cache = config::cache_dir().map(|d| index::cache_path(&d, &canonical));
+    if args.flags.contains("--rebuild") {
+        if let Some(c) = &cache {
+            let _ = std::fs::remove_file(c);
+        }
+    }
+    let (index, stats) = Index::load(&root.path, &config.exclude, cache.as_deref())?;
+    let mut cache_write_ms = 0.0;
+    if let (Some(c), true) = (&cache, stats.stale) {
+        let t = Instant::now();
+        if let Err(e) = index.save_cache(c) {
+            eprintln!("knapp: cache not written: {e}");
+        }
+        cache_write_ms = t.elapsed().as_secs_f64() * 1e3;
+    }
     let rel = match file {
         Some(f) => Some(relative(&index.root, &f)?),
         None => None,
     };
-    Ok((index, rel))
+    Ok(Opened {
+        index,
+        rel,
+        stats,
+        cache,
+        cache_write_ms,
+    })
 }
 
 /// `file` relative to `root`, following symlinks in its folder but not in
@@ -98,8 +132,8 @@ fn file_id(index: &Index, rel: &str) -> Result<usize, String> {
 }
 
 pub fn links(args: &[String]) -> Result<(), String> {
-    let args = parse_args(args, true, false)?;
-    let (index, rel) = open(&args)?;
+    let args = parse_args(args, true, &[])?;
+    let Opened { index, rel, .. } = open(&args)?;
     let rel = rel.expect("links takes a file");
     let id = file_id(&index, &rel)?;
     if index.files[id].kind == Kind::Attachment {
@@ -141,8 +175,8 @@ pub fn links(args: &[String]) -> Result<(), String> {
 }
 
 pub fn backlinks(args: &[String]) -> Result<(), String> {
-    let args = parse_args(args, true, false)?;
-    let (index, rel) = open(&args)?;
+    let args = parse_args(args, true, &[])?;
+    let Opened { index, rel, .. } = open(&args)?;
     let id = file_id(&index, &rel.expect("backlinks takes a file"))?;
     let hits: BTreeSet<(&str, u32, usize)> = index.back[id]
         .iter()
@@ -179,8 +213,8 @@ struct Group {
 }
 
 pub fn unresolved(args: &[String]) -> Result<(), String> {
-    let args = parse_args(args, false, true)?;
-    let (index, _) = open(&args)?;
+    let args = parse_args(args, false, &["--json"])?;
+    let Opened { index, .. } = open(&args)?;
     let mut groups: Vec<Group> = Vec::new();
     for (source, file) in index.files.iter().enumerate() {
         for (link, resolved) in index.links(source).iter().zip(&index.forward[source]) {
@@ -217,7 +251,7 @@ pub fn unresolved(args: &[String]) -> Result<(), String> {
             .then((a.state != "unresolved").cmp(&(b.state != "unresolved")))
             .then(a.key.cmp(&b.key))
     });
-    if args.json {
+    if args.flags.contains("--json") {
         let json: Vec<serde_json::Value> = groups
             .iter()
             .map(|g| {
@@ -242,4 +276,84 @@ pub fn unresolved(args: &[String]) -> Result<(), String> {
         print!("{out}");
     }
     Ok(())
+}
+
+pub fn index(args: &[String]) -> Result<(), String> {
+    let args = parse_args(args, false, &["--rebuild", "--stats", "--watch"])?;
+    let Opened {
+        mut index,
+        stats,
+        cache,
+        cache_write_ms,
+        ..
+    } = open(&args)?;
+    if args.flags.contains("--stats") {
+        print!("{}", stats_text(&index, &stats, cache_write_ms));
+    } else {
+        let notes = index.files.iter().filter(|f| f.kind == Kind::Note).count();
+        let links: usize = index.forward.iter().map(Vec::len).sum();
+        println!(
+            "{notes} notes, {} attachments, {links} links",
+            index.files.len() - notes
+        );
+    }
+    if !args.flags.contains("--watch") {
+        return Ok(());
+    }
+    let ignore = cache.as_deref().and_then(Path::parent);
+    let watch = crate::watch::watch(&index.root, ignore)?;
+    let mut stdout = std::io::stdout();
+    for touched in watch.batches.iter() {
+        let t = Instant::now();
+        if let Some(change) = index.refresh(&touched)? {
+            let _ = writeln!(
+                stdout,
+                "+{} -{} ~{} {:.0} ms",
+                change.added.len(),
+                change.removed.len(),
+                change.modified.len(),
+                t.elapsed().as_secs_f64() * 1e3
+            );
+            let _ = stdout.flush();
+        }
+    }
+    Ok(())
+}
+
+fn stats_text(index: &Index, stats: &LoadStats, cache_write_ms: f64) -> String {
+    let notes = index.files.iter().filter(|f| f.kind == Kind::Note).count();
+    let excluded = index.files.iter().filter(|f| f.excluded).count();
+    let (mut resolved, mut ambiguous, mut unresolved) = (0, 0, 0);
+    for r in index.forward.iter().flatten() {
+        match r {
+            Resolved::File { .. } => resolved += 1,
+            Resolved::Ambiguous { .. } => ambiguous += 1,
+            Resolved::Unresolved => unresolved += 1,
+        }
+    }
+    let tags: BTreeSet<&str> = index
+        .files
+        .iter()
+        .filter_map(|f| f.parsed.as_ref())
+        .flat_map(|p| p.tags.iter().map(|t| t.name.as_str()))
+        .collect();
+    let mut out = format!(
+        "notes\t{notes}\nattachments\t{}\nexcluded\t{excluded}\n\
+         links.resolved\t{resolved}\nlinks.ambiguous\t{ambiguous}\nlinks.unresolved\t{unresolved}\n\
+         tags\t{}\ncache.reused\t{}\ncache.parsed\t{}\n\
+         ms.scan\t{:.1}\nms.cache_read\t{:.1}\nms.parse\t{:.1}\nms.resolve\t{:.1}\nms.cache_write\t{:.1}\n",
+        index.files.len() - notes,
+        tags.len(),
+        stats.reused,
+        stats.parsed,
+        stats.scan_ms,
+        stats.cache_read_ms,
+        stats.parse_ms,
+        stats.resolve_ms,
+        cache_write_ms,
+    );
+    for f in &index.skipped_filters {
+        out.push_str(&format!("skipped_filter\t{f}\n"));
+    }
+    out
 }

@@ -261,9 +261,13 @@ Dependencies for this step: `notify` 8, `sha2`.
 pub struct LoadStats {
     pub reused: usize,        // parses taken from the cache
     pub parsed: usize,
-    pub scan_ms: f64, pub cache_read_ms: f64, pub parse_ms: f64,
-    pub resolve_ms: f64, pub cache_write_ms: f64,
+    pub stale: bool,          // the cache on disk no longer matches
+    pub scan_ms: f64, pub cache_read_ms: f64, pub parse_ms: f64, pub resolve_ms: f64,
 }
+
+pub struct Change { pub added: Vec<String>, pub removed: Vec<String>, pub modified: Vec<String> }
+
+pub fn cache_path(cache_dir: &Path, canonical_root: &Path) -> PathBuf;
 
 impl Index {
     pub fn load(root: &Path, exclude: &[String], cache: Option<&Path>) -> Result<(Index, LoadStats), String>;
@@ -271,6 +275,8 @@ impl Index {
     pub fn save_cache(&self, path: &Path) -> Result<(), String>;
 }
 ```
+
+`load` never writes; the caller writes when `stale` is set.
 
 - File: `{"format": N, "root": "...", "written_ns": T, "files": {"<rel>": {"kind", "mtime_ns", "size", "parsed"}}}`,
   compact JSON. `const CACHE_FORMAT: u32` sits in `index.rs`; any change to
@@ -288,8 +294,9 @@ impl Index {
 - Write to `<name>.<pid>.tmp` in the same directory, then rename, so a CLI
   run and a pane can write without corrupting each other. A failed write
   prints `knapp: cache not written: <reason>` once and carries on.
-- CLI commands load with the cache and write it when `parsed > 0` or
-  entries were dropped.
+- CLI commands load with the cache and write it when `stale` is set: a file
+  was parsed, added, removed, or changed kind or exclusion, or there was no
+  usable cache.
 
 ### Watcher (watch.rs)
 
@@ -332,6 +339,8 @@ starts.
   `HERDR_PLUGIN_STATE_DIR`, so tests never touch a user's cache. The
   fixture test then covers cached loads: every run after the first per
   fixture reads the cache.
+- `tests/common/mod.rs` makes temp copies of fixtures with mtimes a minute
+  old, so the two-second rule does not force reparsing in tests.
 - `tests/cache.rs`: a second load reuses every parse and gives identical
   `forward` tables; a wrong `format`, corrupt JSON, and an unwritable cache
   directory each fall back to parsing; rewriting a file with the same size
@@ -342,7 +351,8 @@ starts.
   `Change` and the resulting state flip. In a temp copy, moving `alpha.md`
   to `x/alpha.md` keeps `[[alpha]]` resolved, and adding `y/alpha.md` makes
   it ambiguous with `x/alpha.md` as the pick. Writes under `.obsidian/`
-  produce no `Change`.
+  and in the cache directory produce no batch; a control run without the
+  cache-dir ignore sees the same write.
 - `tests/perf.rs`, `#[ignore]`: generate 5,000 notes (20 links each, one
   unresolved link and a block id per note, frontmatter tags) in a temp dir
   with a fixed seed, then assert the plan's targets for cold load, warm load,

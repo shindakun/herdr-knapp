@@ -56,6 +56,18 @@ pub fn config_path() -> Option<PathBuf> {
     Some(base.join("knapp").join("config.toml"))
 }
 
+/// The plugin state dir under herdr, else `$XDG_CACHE_HOME/knapp`, else
+/// `~/.cache/knapp`.
+pub fn cache_dir() -> Option<PathBuf> {
+    if let Some(dir) = var("HERDR_PLUGIN_STATE_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    let base = var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| var("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    Some(base.join("knapp"))
+}
+
 impl Config {
     pub fn load() -> Result<Self, String> {
         match config_path() {
