@@ -705,12 +705,18 @@ Link and open the pane on a scratch copy of a fixture:
 
 ## Step 6: send
 
-`send.rs` is pure functions, so it can be tested without herdr:
+No new dependencies.
+
+### send.rs
+
+Pure functions, tested without herdr:
 
 ```rust
 pub fn check(root: &Path, allow: &[String], notes: &[PathBuf]) -> Result<(), Refusal>;
-pub fn fence(notes: &[(String, String)], suffix: &str) -> String; // (rel path, text)
-pub fn suffix() -> String;  // 8 hex chars from 4 bytes of /dev/urandom
+pub fn clean(text: &str) -> String;       // control characters out, \r\n to \n
+pub fn fence(request: &str, notes: &[(String, String)], suffix: &str) -> String; // (rel, text)
+pub fn suffix() -> Result<String, String>; // 8 hex chars from 4 bytes of /dev/urandom
+pub fn valid_pane_id(id: &str) -> bool;    // w[A-Za-z0-9]+:p[A-Za-z0-9]+
 ```
 
 - `check` canonicalizes the root joined to each prefix and each note. A
@@ -718,27 +724,74 @@ pub fn suffix() -> String;  // 8 hex chars from 4 bytes of /dev/urandom
   canonical prefix equals it or is a whole-component ancestor of it
   (`Path::starts_with`, which compares components). `Refusal` lists every
   refused path.
-- `fence` writes the preamble line, then one
-  `<knapp-note-SUFFIX path="...">` element per note, with the note text
-  unchanged. The caller draws a new suffix while any note text contains
-  `knapp-note-SUFFIX`.
-- The size check runs on the fenced text.
-- Target: `herdr agent list` returns
-  `{"result": {"agents": [{"pane_id", "workspace_id", "agent", "agent_status", "focused", "cwd", ...}]}}`.
-  Keep the agents whose `workspace_id` is `HERDR_WORKSPACE_ID`. With one,
-  send to it. With several, show a picker preselecting the pane id in
-  `HERDR_PLUGIN_STATE_DIR/last-agent`. After a send, write that file.
-  herdr-llm-lint's `src/herdr.rs` (`parse_agent_list`, `pick_agent`) is
-  prior art.
-- Send: `herdr agent prompt <pane_id> <text>`. Show herdr's error (such as
-  `agent_blocked`) in the status line.
-- Tests (`tests/send.rs`), each with a temp dir built at test time: `..` in
-  the path, a symlink out of the prefix, `notes-private/` against `notes/`,
-  wrong case (skipped when the temp dir's filesystem is case-sensitive, as on
-  Linux CI), a prefix that names a file, a
-  missing prefix, `S` with one outside backlink, an oversize send, and a
-  note containing `</knapp-note-` text. A fake herdr checks that a refusal
-  never calls `agent prompt` and that an allowed send passes fenced text.
+- `clean` drops C0 controls except `\t` and `\n`, DEL, and C1 (U+0080 to
+  U+009F), after turning `\r\n` into `\n`. It runs on the request, every
+  path, and every note text. Herdr (0.9.1, `src/pane.rs` `paste_payload`)
+  wraps paste text in `ESC[200~ … ESC[201~` without changing it on macOS
+  and Linux, so an unclean `ESC[201~` ends the paste early.
+- `fence` writes the request (if any) and a blank line, the preamble line,
+  then one `<knapp-note-SUFFIX path="...">` element per note. The caller
+  draws a new suffix while any note text contains `knapp-note-SUFFIX`.
+- The size check runs on the final text.
+- `/dev/urandom` read failures refuse the send; there is no fallback to a
+  predictable suffix.
+
+### Picking the agent
+
+- `herdr::agents()` (step 3) and `pick_agent`. Keep the agents whose
+  `workspace_id` is the context's `workspace_id`, and drop any whose
+  `pane_id` fails `valid_pane_id`.
+- One agent: straight to the send line. Several: a picker overlay (`j`/`k`,
+  `enter`, `esc`) of `agent  status  pane  cwd`, preselecting the pane id in
+  `HERDR_PLUGIN_STATE_DIR/last-agent`. None: `no agent in this workspace`.
+- The agent list is read when `s` is pressed, not at start: agents come and
+  go.
+
+### The send line
+
+- `App` state: `send: Option<SendDraft { agent, notes: Vec<String>, request: String }>`.
+  `s` and `S` run `check` first; a refusal sets the status
+  (`not sent: outside send_allow: a.md, b.md`) and opens nothing.
+- While open, keys edit `request` (as in the query line); `enter` pushes
+  `Effect::Send { pane, text }` with the fenced text; `esc` closes it.
+  The line shows `to <agent> <pane> · <n> notes · <size> ›` and the request.
+- `S`'s notes: the open note, then the distinct sources of its backlinks in
+  path order.
+- The loop runs `herdr agent prompt <pane> <text>` in a thread and sends
+  back `AppEvent::Sent(Result<(), String>)`: `sent to <agent>` or herdr's
+  error (such as `agent_blocked`) on the status line. On success it writes
+  `last-agent`.
+
+### Tests
+
+- `tests/send.rs`, each case in a temp dir built at test time: `..` in the
+  path, a symlink out of the prefix, `notes-private/` against `notes/`,
+  wrong case (skipped when the temp dir's filesystem is case-sensitive, as
+  on Linux CI), a prefix that names a file, a missing prefix, `S` with one
+  outside backlink, an oversize send, a note containing `</knapp-note-`, a
+  note containing `ESC[201~` and `\r\n` (gone, and newlines kept), a path
+  with `&<>"`, and pane ids that pass and fail.
+- `tests/pane.rs`: `s` with no `send_allow` refuses with the paths; with
+  one agent, the send line opens with the target and size; typing a request
+  and `enter` push one `Effect::Send` whose text starts with the request and
+  holds the fence; `esc` pushes nothing; `S` lists the backlinks.
+- A fake herdr (a shell script as `HERDR_BIN_PATH`, printing
+  `tests/fixtures/herdr/agent_list.json` and logging argv) checks that a
+  refusal never runs `agent prompt` and an allowed send passes the text as
+  one argument.
+
+### In herdr
+
+Send only to a scratch agent started for the test in its own split, never
+to an agent doing other work.
+
+1. A config with `send_allow` for a scratch root; open a note inside and one
+   outside the prefix. Outside: refused, and nothing reaches the agent.
+2. Inside: the send line shows the scratch agent; type a request, `enter`.
+   The agent receives one message: the request, the preamble, and the
+   fenced note.
+3. A note containing an `ESC[201~` sequence and a line after it: the agent
+   receives it as one paste, with no extra submission.
 
 ## Step 7: graph and images
 

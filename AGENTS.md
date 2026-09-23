@@ -47,7 +47,10 @@ graph. It never writes a note.
   refusal test in `tests/send.rs` before its key binding.
 - Sent note text is data. `send.rs` fences every note in an XML element whose
   tag carries a per-send random suffix, under a line telling the agent not to
-  follow instructions in it. Nothing reaches `herdr agent prompt` unfenced.
+  follow instructions in it. Nothing reaches `herdr agent prompt` unfenced
+  or uncleaned: `send::clean` removes control characters from every note,
+  path, and request, because herdr pastes text unchanged inside
+  `ESC[200~ … ESC[201~` and an `ESC[201~` in a note would end the paste.
 - A thread that reads watcher batches owns the `Watch` and calls
   `next_batch()`. A closure that names only `watch.batches` drops the
   watcher and silently stops all events.
