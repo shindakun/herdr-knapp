@@ -145,6 +145,7 @@ pub struct Detail {
     pub hits: Vec<Hit>,
     /// The graph canvas under the first rows, with its content key.
     pub canvas: Option<(String, Rc<CanvasSpec>)>,
+    pub images: Vec<ImageRef>,
 }
 
 /// An image layer the screen should have: its name, a key that changes when
@@ -152,9 +153,29 @@ pub struct Detail {
 #[derive(Debug, Clone)]
 pub struct Layer {
     pub name: String,
+    /// Changes when the content or the visible band does.
     pub key: String,
-    pub canvas: Rc<CanvasSpec>,
+    pub content: LayerContent,
+    /// The rows of the content on screen, `start..end` of its full height.
+    pub band: std::ops::Range<u16>,
     pub at: Placement,
+}
+
+#[derive(Debug, Clone)]
+pub enum LayerContent {
+    Canvas(Rc<CanvasSpec>),
+    Image { path: PathBuf, rows: u16 },
+}
+
+/// An image embed in a rendered note: rows `line..line + rows`, `cols`
+/// wide, drawn from `path`. `key` names the file's content.
+#[derive(Debug, Clone)]
+pub struct ImageRef {
+    pub line: usize,
+    pub rows: u16,
+    pub cols: u16,
+    pub path: PathBuf,
+    pub key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -894,7 +915,7 @@ impl App {
     fn build_detail(&self, page: &Page, width: u16, height: u16) -> Detail {
         match page {
             Page::Summary => self.summary(),
-            Page::Note(rel) => self.note_detail(rel, width),
+            Page::Note(rel) => self.note_detail(rel, width, height),
             Page::Unresolved(target) => self.unresolved_detail(target),
             Page::Ambiguous(key) => self.ambiguous_detail(key),
             Page::Graph(rel) => self.graph_detail(rel, width, height),
@@ -910,6 +931,7 @@ impl App {
             source_line: vec![1; n],
             hits,
             canvas: None,
+            images: Vec::new(),
         }
     }
 
@@ -951,7 +973,68 @@ impl App {
         self.text_detail(self.root_label.clone(), lines, Vec::new())
     }
 
-    fn note_detail(&self, rel: &str, width: u16) -> Detail {
+    /// Cells for each PNG embed pane graphics can draw: as wide as the
+    /// image in cells, at most the panel's width, and no taller than the
+    /// panel. Keyed by link index, with the file and a content key.
+    fn image_slots(
+        &self,
+        id: FileId,
+        width: u16,
+        height: u16,
+    ) -> HashMap<usize, (u16, u16, PathBuf, String)> {
+        const MAX_BYTES: u64 = 8 * 1024 * 1024;
+        let mut slots = HashMap::new();
+        let Some((cw, ch)) = self.cell_px else {
+            return slots;
+        };
+        let (cw, ch) = (f64::from(cw), f64::from(ch));
+        let links = self.index.links(id).iter().zip(&self.index.forward[id]);
+        for (i, (link, state)) in links.enumerate() {
+            if link.kind != crate::parse::LinkKind::Embed {
+                continue;
+            }
+            let Some(target) = state.target() else {
+                continue;
+            };
+            let file = &self.index.files[target];
+            let png = file.rel.to_lowercase().ends_with(".png");
+            if file.kind != Kind::Attachment || !png || file.size > MAX_BYTES {
+                continue;
+            }
+            let path = self.index.root.join(&file.rel);
+            let mut head = [0u8; 24];
+            let read = std::fs::File::open(&path)
+                .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head));
+            let Some((w, h)) = read.ok().and_then(|()| crate::herdr::png_size(&head)) else {
+                continue;
+            };
+            if w == 0 || h == 0 {
+                continue;
+            }
+            let (w, h) = (f64::from(w), f64::from(h));
+            let mut cols = (w / cw).ceil().clamp(1.0, f64::from(width));
+            let mut rows = (cols * cw * h / w / ch).ceil().max(1.0);
+            let max_rows = f64::from(height.saturating_sub(1).max(1));
+            if rows > max_rows {
+                rows = max_rows;
+                cols = (rows * ch * w / h / cw).floor().max(1.0);
+            }
+            let key = format!("img:{}:{}:{}", file.rel, file.mtime_ns, file.size);
+            slots.insert(i, (cols as u16, rows as u16, path, key));
+        }
+        slots
+    }
+
+    /// The cell size changed (or graphics came or went): anything laid out
+    /// in cells is stale.
+    pub fn set_cell_px(&mut self, px: Option<(u32, u32)>) {
+        if px != self.cell_px {
+            self.cell_px = px;
+            self.details.clear();
+        }
+    }
+
+    fn note_detail(&self, rel: &str, width: u16, height: u16) -> Detail {
         let Some(id) = self.index.id(rel) else {
             return self.text_detail(
                 rel.to_string(),
@@ -963,14 +1046,30 @@ impl App {
         let Some(parsed) = &self.index.files[id].parsed else {
             return self.text_detail(rel.to_string(), vec![Line::from(text)], Vec::new());
         };
-        let r = render::render(
+        let slots = self.image_slots(id, width, height);
+        let r = render::render_with_images(
             &text,
             parsed,
             &self.index.forward[id],
             width,
             self.fold_frontmatter,
             self.theme,
+            &slots.iter().map(|(&i, s)| (i, (s.0, s.1))).collect(),
         );
+        let images = r
+            .images
+            .iter()
+            .filter_map(|s| {
+                let (_, _, path, key) = slots.get(&s.link)?;
+                Some(ImageRef {
+                    line: s.line,
+                    rows: s.rows,
+                    cols: s.cols,
+                    path: path.clone(),
+                    key: key.clone(),
+                })
+            })
+            .collect();
         Detail {
             title: rel.to_string(),
             lines: r.lines,
@@ -985,6 +1084,7 @@ impl App {
                 })
                 .collect(),
             canvas: None,
+            images,
         }
     }
 
@@ -1211,6 +1311,7 @@ impl App {
             source_line: vec![1; n],
             hits,
             canvas,
+            images: Vec::new(),
         }
     }
 

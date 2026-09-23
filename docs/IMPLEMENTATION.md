@@ -840,7 +840,15 @@ knapp embeds no font.
 ### Effects
 
 `App` never touches the socket. Each draw leaves `app.layers`: the
-layers the screen should have, as `Layer { name, key, canvas, at }`. The loop compares them with what it last sent and sends `set` for
+layers the screen should have, as
+`Layer { name, key, content, band, at }`. `content` is the graph canvas or
+an image file; `band` is the rows of it inside the note area. Herdr clips
+only to the pane, so `ui::draw_detail` cuts each layer to the note area and
+places the band at its first visible row; the loop draws the canvas for
+those rows (`graph::canvas(spec, px, band)`) or cuts the image
+(`graph::crop_rows` on the decoded file, decoded once and cached). A layer
+shown whole is sent as the file's own bytes. A picture that cannot be
+decoded is left out; only herdr refusing a call turns graphics off. The loop compares them with what it last sent and sends `set` for
 new or moved layers and `clear` for gone ones; unchanged layers are not
 sent again. Content (the PNG) is built by the loop and cached by key, since
 `App` has no cell size in pixels. The help overlay and the picker empty
@@ -907,7 +915,11 @@ from its own links and backlinks, and `tests/cli.rs` compares.
   width in cells is the panel width, capped at the image's own width in
   cells; rows keep the aspect ratio in pixels. The width and height come
   from the IHDR chunk (bytes 16 to 23), read once per file.
-- `Rendered` gains `images: Vec<ImageSlot { line, rows, cols, path }>`.
+- `render_with_images` takes the slots by link index and reserves blank
+  rows for each; `Rendered` gains `images: Vec<ImageSlot { line, rows,
+  cols, link }>`, and the app maps each to an `ImageRef` with its path and
+  a content key (path, mtime, size). `App::set_cell_px` drops every cached
+  page when the cell size changes.
 - Placement: layers `img-0` to `img-13` for the visible slots in order,
   content the file's bytes (format `png`). Slots past 14 keep the
   placeholder line.
@@ -927,8 +939,11 @@ from its own links and backlinks, and `tests/cli.rs` compares.
   records the request lines and answers `pane.graphics.info`, and errors
   coming back as `code: message`. Resending only changed layers is the
   event loop's `Sync`, checked in herdr.
-- Images: the IHDR reader on `vault-basic/img.png`, slot sizes, the 8 MB
-  cutoff, and the placeholder without graphics.
+- Images: the IHDR reader on `vault-basic/img.png`, reserved rows in
+  `tests/render.rs`, an `img-0` layer for `index.md` with graphics and the
+  placeholder without, the 8 MB cutoff, `crop_rows` taking the matching
+  pixel rows, and a scrolled canvas cut rather than moved above the note
+  area.
 
 ### In herdr
 
@@ -939,6 +954,8 @@ The screen cannot be captured from here, so the user looks:
 2. Resize the pane and scroll: the image follows.
 3. `?` while the graph shows: the image goes; `esc`: it comes back.
 4. A note with a PNG embed shows the image in place of the placeholder.
+5. Scrolled so the image is partly above the note area, only its lower
+   rows show, below the title.
 
 ## Step 8: actions, link handler, peek
 

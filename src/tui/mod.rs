@@ -226,7 +226,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
         if let Some(g) = &graphics {
             if let Err(e) = sync.apply(g, &app.layers, app.cell_px) {
                 // feature_disabled and the like: no images for this session.
-                app.cell_px = None;
+                app.set_cell_px(None);
                 app.status = Some(format!("pane graphics off: {e}"));
             }
         }
@@ -348,10 +348,10 @@ fn query_graphics(graphics: &Option<crate::herdr::Graphics>, app: &mut App) {
         return;
     };
     match g.info() {
-        Ok(info) if info.cell_px.0 > 0 && info.cell_px.1 > 0 => app.cell_px = Some(info.cell_px),
-        Ok(_) => app.cell_px = None,
+        Ok(info) if info.cell_px.0 > 0 && info.cell_px.1 > 0 => app.set_cell_px(Some(info.cell_px)),
+        Ok(_) => app.set_cell_px(None),
         Err(e) => {
-            app.cell_px = None;
+            app.set_cell_px(None);
             app.status = Some(format!("pane graphics off: {e}"));
         }
     }
@@ -365,11 +365,34 @@ type Png = (Vec<u8>, (u32, u32));
 /// is sent again only when its content or placement changes.
 #[derive(Default)]
 struct Sync {
+    /// Decoded images, for cutting the band that is on screen.
+    decoded: HashMap<PathBuf, tiny_skia::Pixmap>,
     sent: HashMap<String, (String, crate::herdr::Placement)>,
     pngs: HashMap<(String, CellPx), Png>,
 }
 
 impl Sync {
+    /// The PNG for a layer's visible band.
+    fn render(&mut self, layer: &app::Layer, px: CellPx) -> Result<Vec<u8>, String> {
+        match &layer.content {
+            app::LayerContent::Canvas(spec) => crate::graph::canvas(spec, px, layer.band.clone()),
+            app::LayerContent::Image { path, rows } => {
+                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+                if layer.band.start == 0 && layer.band.end >= *rows {
+                    return Ok(bytes);
+                }
+                if !self.decoded.contains_key(path) {
+                    if self.decoded.len() >= 8 {
+                        self.decoded.clear();
+                    }
+                    let pm = tiny_skia::Pixmap::decode_png(&bytes).map_err(|e| e.to_string())?;
+                    self.decoded.insert(path.clone(), pm);
+                }
+                crate::graph::crop_rows(&self.decoded[path], *rows, layer.band.clone())
+            }
+        }
+    }
+
     fn apply(
         &mut self,
         g: &crate::herdr::Graphics,
@@ -399,10 +422,16 @@ impl Sync {
             let (png, size) = match self.pngs.get(&(layer.key.clone(), px)) {
                 Some(done) => done.clone(),
                 None => {
-                    let png = crate::graph::canvas(&layer.canvas, px)?;
-                    let size = crate::herdr::png_size(&png).ok_or("canvas: not a PNG")?;
-                    // Keys change with every resize and refresh; keep a few.
-                    if self.pngs.len() >= 8 {
+                    // A picture that cannot be drawn is left out; only herdr
+                    // refusing a call turns graphics off.
+                    let Ok(png) = self.render(layer, px) else {
+                        continue;
+                    };
+                    let Some(size) = crate::herdr::png_size(&png) else {
+                        continue;
+                    };
+                    // Keys change with every resize, scroll, and refresh.
+                    if self.pngs.len() >= 32 {
                         self.pngs.clear();
                     }
                     self.pngs

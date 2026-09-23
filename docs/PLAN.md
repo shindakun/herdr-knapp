@@ -238,7 +238,10 @@ first, then the nodes with the fewest links, and the page says how many
 were left out. `--dot` has no cap.
 
 Images sit under the pane's text, so they are cleared while the help or the
-agent picker is open, and placed again when it closes.
+agent picker is open, and placed again when it closes. Herdr clips an image
+only to the pane, so knapp sends just the rows inside the note area: a
+scrolled image is cut at the top of the area, not drawn under the title and
+header.
 
 Whole-vault graph is out of scope.
 
@@ -550,7 +553,7 @@ file.
 6. `send` with the allowlist and agent picker. Tests before the key binding.
    Built.
 7. Graph: `knapp graph`, the tree, then the canvas through pane graphics.
-   Built. PNG embeds in the detail panel, as a second change: not built.
+   PNG embeds in the detail panel, as a second change. Built.
 8. `open-pane`, `peek-selection`, the link handler, and the peek popup, with
    their manifest entries.
 9. Multiple roots.

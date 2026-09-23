@@ -5,10 +5,10 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 to 6 and the graph of step 7 are built: the link index,
-its cache and watcher, the CLI, and the notes pane with editing, search,
-tags, unresolved links, orphans, recent notes, sending notes to an agent,
-and the local graph. Images in notes are not built yet. The `open` action and its
+Status: steps 1 to 7 of `docs/PLAN.md` are built: the link index, its
+cache and watcher, the CLI, and the notes pane with editing, search, tags,
+unresolved links, orphans, recent notes, sending notes to an agent, the
+local graph, and PNG images in notes. The `open` action and its
 keybinding come in a later step; until then, open the pane with:
 
 ```sh
@@ -31,6 +31,8 @@ the pane shows one side at a time; `h` / `l` switch.
   `$EDITOR`, so set `editor` in the config.
 - `y` copies the note's path and `Y` a `[[wikilink]]` to it, through the
   terminal's clipboard (OSC 52), which works over SSH under Herdr.
+- PNG embeds (`![[pic.png]]`) show as pictures where Herdr's pane graphics
+  work (kitty, Ghostty, WezTerm), up to 8 MB; elsewhere, a placeholder line.
 - `g` shows the open note's local graph: the linked notes laid out around
   it, drawn with Herdr's pane graphics where the terminal supports them,
   above the same notes as a tree. Every name opens its note.

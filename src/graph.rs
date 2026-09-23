@@ -352,16 +352,23 @@ pub fn spec(
     }
 }
 
-/// The canvas as a PNG: transparent, edges as lines, a dot at each node's
-/// cell centre. `cell_px` is the terminal cell size in pixels.
-pub fn canvas(spec: &CanvasSpec, cell_px: (u32, u32)) -> Result<Vec<u8>, String> {
+/// Rows `band` of the canvas as a PNG: transparent, edges as lines, a dot
+/// at each node's cell centre. `cell_px` is the terminal cell size in
+/// pixels.
+pub fn canvas(
+    spec: &CanvasSpec,
+    cell_px: (u32, u32),
+    band: std::ops::Range<u16>,
+) -> Result<Vec<u8>, String> {
     let (cw, ch) = (cell_px.0.max(1), cell_px.1.max(1));
-    let mut pm = Pixmap::new(u32::from(spec.cols) * cw, u32::from(spec.rows) * ch)
+    let rows = band.end.saturating_sub(band.start);
+    let mut pm = Pixmap::new(u32::from(spec.cols) * cw, u32::from(rows) * ch)
         .ok_or("canvas: empty or too large")?;
+    let top = f32::from(band.start) * ch as f32;
     let centre = |(x, y): (u16, u16)| {
         (
             (f32::from(x) + 0.5) * cw as f32,
-            (f32::from(y) + 0.5) * ch as f32,
+            (f32::from(y) + 0.5) * ch as f32 - top,
         )
     };
     let mut line = Paint {
@@ -404,4 +411,20 @@ pub fn canvas(spec: &CanvasSpec, cell_px: (u32, u32)) -> Result<Vec<u8>, String>
         }
     }
     pm.encode_png().map_err(|e| format!("canvas: {e}"))
+}
+
+/// Rows `band` of an image shown `rows` cells tall, as a PNG: the matching
+/// slice of its pixel rows.
+pub fn crop_rows(pm: &Pixmap, rows: u16, band: std::ops::Range<u16>) -> Result<Vec<u8>, String> {
+    let rows = u32::from(rows.max(1));
+    let y0 = pm.height() * u32::from(band.start) / rows;
+    let y1 = (pm.height() * u32::from(band.end) / rows)
+        .max(y0 + 1)
+        .min(pm.height());
+    let rect = tiny_skia::IntRect::from_xywh(0, y0 as i32, pm.width(), y1.saturating_sub(y0))
+        .ok_or("image band out of range")?;
+    pm.clone_rect(rect)
+        .ok_or("image band out of range")?
+        .encode_png()
+        .map_err(|e| e.to_string())
 }

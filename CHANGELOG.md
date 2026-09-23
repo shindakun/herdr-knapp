@@ -10,6 +10,7 @@
 - Notes pane: tree, rendered note, backlinks, and forward links, with link
   following, history, a folded frontmatter table, mouse, and a narrow
   layout. It updates as files change.
+- PNG embeds render as images through Herdr's pane graphics.
 - `g` shows the local graph, drawn under the text with pane graphics, and
   `knapp graph` prints it as a tree or Graphviz.
 - `s` / `S` send the open note, or it and its backlinks, to a workspace

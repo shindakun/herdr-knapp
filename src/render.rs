@@ -16,6 +16,17 @@ pub struct Rendered {
     /// Source line (1-based) each rendered line starts at, parallel to `lines`.
     pub source_line: Vec<u32>,
     pub hits: Vec<LinkHit>,
+    /// Blank rows reserved for images drawn with pane graphics.
+    pub images: Vec<ImageSlot>,
+}
+
+/// Rows `line..line + rows` hold link `link`'s image, `cols` wide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageSlot {
+    pub line: usize,
+    pub rows: u16,
+    pub cols: u16,
+    pub link: usize,
 }
 
 /// Where a link landed: one entry per rendered line the link touches.
@@ -147,6 +158,7 @@ struct Renderer<'a> {
     need_blank: bool,
     links: &'a [parse::Link],
     states: &'a [Resolved],
+    slots: &'a HashMap<usize, (u16, u16)>,
 }
 
 pub fn render(
@@ -156,6 +168,29 @@ pub fn render(
     width: u16,
     fold_frontmatter: bool,
     theme: Theme,
+) -> Rendered {
+    render_with_images(
+        text,
+        parsed,
+        states,
+        width,
+        fold_frontmatter,
+        theme,
+        &HashMap::new(),
+    )
+}
+
+/// `render`, with `slots` giving the size in cells of each image embed (by
+/// link index) that pane graphics will draw; those get blank rows instead
+/// of a placeholder.
+pub fn render_with_images(
+    text: &str,
+    parsed: &Parsed,
+    states: &[Resolved],
+    width: u16,
+    fold_frontmatter: bool,
+    theme: Theme,
+    slots: &HashMap<usize, (u16, u16)>,
 ) -> Rendered {
     let width = usize::from(width.max(10));
     let mut r = Renderer {
@@ -168,7 +203,9 @@ pub fn render(
             lines: Vec::new(),
             source_line: Vec::new(),
             hits: Vec::new(),
+            images: Vec::new(),
         },
+        slots,
         stack: Vec::new(),
         inline: Vec::new(),
         inline_src: None,
@@ -678,6 +715,24 @@ impl Renderer<'_> {
                     return;
                 }
                 let link = by_start.get(&range.start).copied();
+                if let Some((i, &(cols, rows))) = link.and_then(|i| Some((i, self.slots.get(&i)?)))
+                {
+                    // The picture takes its own rows, between blocks.
+                    self.block_start();
+                    let at = self.line_of(range.start);
+                    let line = self.out.lines.len();
+                    for _ in 0..rows {
+                        self.emit(Vec::new(), at);
+                    }
+                    self.out.images.push(ImageSlot {
+                        line,
+                        rows,
+                        cols,
+                        link: i,
+                    });
+                    self.need_blank = true;
+                    return;
+                }
                 let target = link.map_or(dest_url.to_string(), |i| self.links[i].target.clone());
                 self.link = link;
                 if is_image(&target) {

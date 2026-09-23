@@ -156,3 +156,25 @@ fn cut_marks_truncation() {
     assert_eq!(cut("abc", 4), "abc");
     assert_eq!(cut("日本語", 4), "日…");
 }
+
+#[test]
+fn image_slots_reserve_rows_instead_of_a_placeholder() {
+    let text = "Before\n\n![[pic.png]]\n\nAfter\n";
+    let parsed = parse(text);
+    let states = vec![knapp::index::Resolved::Unresolved; parsed.links.len()];
+    let slots = std::collections::HashMap::from([(0usize, (6u16, 3u16))]);
+    let r = knapp::render::render_with_images(text, &parsed, &states, 40, true, PLAIN, &slots);
+    let rows = text_of(&r);
+    assert_eq!(rows, ["Before", "", "", "", "", "", "After"]);
+    assert_eq!(
+        r.images,
+        [knapp::render::ImageSlot {
+            line: 2,
+            rows: 3,
+            cols: 6,
+            link: 0
+        }]
+    );
+    // Without a slot: the placeholder.
+    assert!(render_str(text, 40).contains(&"[image:\u{a0}pic.png]".to_string()));
+}

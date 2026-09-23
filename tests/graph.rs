@@ -80,12 +80,16 @@ fn canvas_is_a_png_of_cells_times_cell_size() {
     let s = spec(&index, &l, &cells, 40, 12);
     assert_eq!(s.dots.len(), l.nodes.len());
     assert!(s.dots[0].2, "the root is marked");
-    let png = canvas(&s, (8, 16)).unwrap();
+    let png = canvas(&s, (8, 16), 0..12).unwrap();
     let pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
     assert_eq!((pm.width(), pm.height()), (320, 192));
     assert_eq!(knapp::herdr::png_size(&png), Some((320, 192)));
     // Transparent away from the dots and edges.
     assert_eq!(pm.pixel(0, 0).unwrap().alpha(), 0);
+
+    // A band is that many rows tall, drawn from its first row.
+    let band = canvas(&s, (8, 16), 3..7).unwrap();
+    assert_eq!(knapp::herdr::png_size(&band), Some((320, 64)));
 }
 
 #[test]
@@ -97,4 +101,24 @@ fn png_size_reads_ihdr() {
     .unwrap();
     assert_eq!(knapp::herdr::png_size(&png), Some((2, 2)));
     assert_eq!(knapp::herdr::png_size(b"not a png at all, no"), None);
+}
+
+#[test]
+fn crop_rows_takes_the_matching_pixel_rows() {
+    let mut pm = tiny_skia::Pixmap::new(4, 100).unwrap();
+    // Paint rows 50..100 opaque red.
+    pm.fill_rect(
+        tiny_skia::Rect::from_xywh(0.0, 50.0, 4.0, 50.0).unwrap(),
+        &tiny_skia::Paint::default(),
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    let half = knapp::graph::crop_rows(&pm, 10, 5..10).unwrap();
+    let back = tiny_skia::Pixmap::decode_png(&half).unwrap();
+    assert_eq!((back.width(), back.height()), (4, 50));
+    assert_eq!(back.pixel(0, 0).unwrap().alpha(), 255);
+    let top = knapp::graph::crop_rows(&pm, 10, 0..5).unwrap();
+    let back = tiny_skia::Pixmap::decode_png(&top).unwrap();
+    assert_eq!(back.height(), 50);
+    assert_eq!(back.pixel(0, 0).unwrap().alpha(), 0);
 }

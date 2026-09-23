@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, Paragraph};
 use ratatui::Frame;
 
-use super::app::{App, Focus, Layer, Mode, HELP};
+use super::app::{App, Focus, Layer, LayerContent, Mode, HELP};
 use crate::herdr::Placement;
 
 /// Below this width the list and the note are shown one at a time.
@@ -195,20 +195,66 @@ fn draw_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     frame.render_widget(Paragraph::new(visible), content);
 
-    // The canvas image sits under the text, so overlays drawn in cells would
-    // show it through; leave it out while one is open.
-    if let (Some((key, spec)), None, false) = (&detail.canvas, &app.picker, app.help) {
-        app.layers.push(Layer {
-            name: "graph".into(),
-            key: key.clone(),
-            canvas: spec.clone(),
-            at: Placement {
-                col: i32::from(content.x),
-                row: i32::from(content.y) - app.scroll as i32,
-                cols: spec.cols,
-                rows: spec.rows,
-            },
-        });
+    // Images sit under the text, so overlays drawn in cells would show
+    // them through; leave them out while one is open. Each image is cut to
+    // its rows inside the content area: herdr clips only to the pane, so an
+    // uncut image would slide under the title and header when scrolled.
+    if app.picker.is_none() && !app.help {
+        let top = app.scroll;
+        let bottom = app.scroll + usize::from(height);
+        let band = |line: usize, rows: u16| {
+            let start = top.max(line) - line;
+            let end = bottom.min(line + usize::from(rows)).saturating_sub(line);
+            (start < end).then(|| {
+                let row = i32::from(content.y) + (line + start - top) as i32;
+                (start as u16..end as u16, row)
+            })
+        };
+        if let Some((key, spec)) = &detail.canvas {
+            if let Some((b, row)) = band(0, spec.rows) {
+                app.layers.push(Layer {
+                    name: "graph".into(),
+                    key: format!("{key}#{}-{}", b.start, b.end),
+                    content: LayerContent::Canvas(spec.clone()),
+                    at: Placement {
+                        col: i32::from(content.x),
+                        row,
+                        cols: spec.cols,
+                        rows: b.end - b.start,
+                    },
+                    band: b,
+                });
+            }
+        }
+        // herdr allows 16 layers a pane; the graph takes one.
+        for img in detail
+            .images
+            .iter()
+            .filter_map(|i| Some((i, band(i.line, i.rows)?)))
+            .take(14)
+        {
+            let (img, (b, row)) = img;
+            let n = app
+                .layers
+                .iter()
+                .filter(|l| l.name.starts_with("img-"))
+                .count();
+            app.layers.push(Layer {
+                name: format!("img-{n}"),
+                key: format!("{}#{}-{}", img.key, b.start, b.end),
+                content: LayerContent::Image {
+                    path: img.path.clone(),
+                    rows: img.rows,
+                },
+                at: Placement {
+                    col: i32::from(content.x),
+                    row,
+                    cols: img.cols,
+                    rows: b.end - b.start,
+                },
+                band: b,
+            });
+        }
     }
 
     if let Some(hit) = app.selected_hit.and_then(|i| detail.hits.get(i)) {

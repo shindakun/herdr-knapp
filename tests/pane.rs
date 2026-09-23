@@ -578,9 +578,12 @@ fn graph_page_with_graphics_has_a_canvas_layer() {
     assert_eq!(p.app.layers.len(), 1);
     let layer = &p.app.layers[0];
     assert_eq!(layer.name, "graph");
-    assert_eq!(layer.canvas.dots.len(), 5);
+    let knapp::tui::app::LayerContent::Canvas(spec) = &layer.content else {
+        panic!("not the canvas");
+    };
+    assert_eq!(spec.dots.len(), 5);
     // The canvas sits under the detail's first content row.
-    assert_eq!((layer.at.row, layer.at.cols), (2, layer.canvas.cols));
+    assert_eq!((layer.at.row, layer.at.cols), (2, spec.cols));
     let screen = p.screen();
     for name in ["alpha", "beta", "index", "deep", "img.png"] {
         assert!(screen.contains(name), "{name} missing:\n{screen}");
@@ -599,7 +602,52 @@ fn graph_page_with_graphics_has_a_canvas_layer() {
 gl",
     );
     assert_eq!(p.app.layers[0].at.row, 2);
+    assert_eq!(p.app.layers[0].band.start, 0);
     p.keys("j");
     assert_eq!(p.app.scroll, 1);
-    assert_eq!(p.app.layers[0].at.row, 1);
+    // The image stays inside the content area: it is cut, not moved up
+    // under the title.
+    let layer = &p.app.layers[0];
+    assert_eq!((layer.at.row, layer.band.start), (2, 1));
+    assert_eq!(layer.at.rows, layer.band.end - layer.band.start);
+}
+
+#[test]
+fn png_embeds_get_an_image_layer_with_graphics() {
+    // index.md embeds img.png (2x2 px): one cell.
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 30);
+    p.app.set_cell_px(Some((8, 16)));
+    p.key(KeyCode::End);
+    p.keys("\n");
+    let imgs: Vec<_> = p
+        .app
+        .layers
+        .iter()
+        .filter(|l| l.name.starts_with("img-"))
+        .collect();
+    assert_eq!(imgs.len(), 1, "{:?}", p.app.layers);
+    assert_eq!((imgs[0].at.cols, imgs[0].at.rows), (1, 1));
+    assert!(!p.screen().contains("[image:"));
+
+    // Without graphics, the placeholder.
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 30);
+    p.key(KeyCode::End);
+    p.keys("\n");
+    assert!(p.app.layers.is_empty());
+    assert!(p.screen().contains("[image:\u{a0}img.png]"));
+}
+
+#[test]
+fn a_png_over_8_mb_keeps_the_placeholder() {
+    let root = temp_copy("vault-basic", "pane-bigpng");
+    let mut big = std::fs::read(root.join("img.png")).unwrap()[..24].to_vec();
+    big.resize(9 * 1024 * 1024, 0);
+    std::fs::write(root.join("img.png"), big).unwrap();
+    let mut p = Pane::new(&root, 100, 30);
+    p.app.set_cell_px(Some((8, 16)));
+    p.key(KeyCode::End);
+    p.keys("\n");
+    assert!(p.app.layers.is_empty());
+    assert!(p.screen().contains("[image:\u{a0}img.png]"));
+    std::fs::remove_dir_all(root).ok();
 }
