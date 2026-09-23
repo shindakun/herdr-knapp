@@ -17,8 +17,7 @@ graph. It never writes a note.
 - `src/index.rs` holds the forward and back tables, resolution, and the
   cache; `src/watch.rs` is the notifier and incremental reindex.
 - `src/render.rs` turns Markdown into styled lines; `src/graph.rs` is the
-  local subgraph, layout, Graphviz output, and PNG frame. `assets/font/` is
-  the embedded label font and its license.
+  local subgraph, tree, layout, Graphviz output, and canvas image.
 - `src/herdr.rs` reads the environment Herdr injects and calls the Herdr CLI.
 - `src/editor.rs` picks and runs the editor and encodes OSC 52 copies;
   `src/search.rs` is full-text search through `rg` or built in.
@@ -69,7 +68,7 @@ graph. It never writes a note.
 - Dependencies come from this list as the steps need them: `serde`,
   `serde_json`, `toml`, `pulldown-cmark`, `unicode-normalization`,
   `ratatui` (its `crossterm` re-export, no direct `crossterm`), `notify`,
-  `sha2`, `tiny-skia`, `fontdue`. Anything else needs a reason in the commit
+  `sha2`, `tiny-skia`. Anything else needs a reason in the commit
   message.
 - A step in `docs/PLAN.md` closes only when it has been run against a linked
   plugin in a real Herdr session. Fixture tests are necessary, not

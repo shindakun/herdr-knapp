@@ -174,8 +174,9 @@ unresolved. A note embed (`![[note]]`) is a followable link line, not an
 inline copy. Frontmatter shows as a table at the top, folded to one line
 until `f` opens it. Long lines wrap; code block lines and table cells are
 cut with `…` instead. PNG embeds render through pane graphics where
-available. Other image formats, and every image without graphics, show as a
-placeholder line with the file name.
+available, scaled to the panel's width, up to 8 MB. Other image formats,
+larger files, and every image without graphics show as a placeholder line
+with the file name.
 
 Following a link to an attachment shows its path, kind, and size. With
 `NO_COLOR` set, states and styles use bold, dim, underline, and reverse
@@ -212,21 +213,29 @@ shows the target name and the notes that reference it.
 
 ## Graph
 
-`g` opens the local graph for the open note, N hops out, default 2.
+`g` opens the local graph for the open note, `graph_hops` out (default 2).
+The graph page is a canvas of the notes around the open one, with their
+names, above an indented tree of the same notes. Every name in both is a
+link: `n` / `N` step through them and `enter` opens one.
 
-With graphics: `pane.graphics.info` gives the cell size, the layout runs
-force-directed with the open note centered and nodes sized by inbound links,
-and the frame is drawn with `tiny-skia`, labels with `fontdue` and an
-embedded OFL font, then sent as PNG through `pane.graphics.set` sized to the
-detail panel's cell grid. Resizing redraws.
+The tree lists each note once, under the note that first reached it,
+marked `->` (it links there), `<-` (it links back), or `<->` (both).
+Children are sorted by path. Attachments appear as leaves; unresolved
+targets do not.
 
-Without graphics (`feature_disabled`, `pane_visible` false, or the peek
-popup, which has no pane id): an indented tree with inbound and outbound
-marked.
+With pane graphics, the canvas is an image of edges and dots placed under
+the pane's text (`z_index` −1), and the names are ordinary text over it.
+The layout is force-directed with the open note in the middle and dots
+sized by inbound links. Without graphics (`feature_disabled`, no
+`HERDR_PANE_ID`, or the peek popup, which has no pane id), the canvas is
+left out and the tree is the whole page.
 
 A local graph holds at most 200 nodes. Past that, the farthest hop is cut
-first, then the nodes with the fewest links, and the view says how many were
-left out. `--dot` has no cap.
+first, then the nodes with the fewest links, and the page says how many
+were left out. `--dot` has no cap.
+
+Images sit under the pane's text, so they are cleared while the help or the
+agent picker is open, and placed again when it closes.
 
 Whole-vault graph is out of scope.
 
@@ -460,7 +469,7 @@ knapp backlinks FILE
 knapp unresolved [--json]   # unresolved and ambiguous
 knapp orphans              # one path per line
 knapp tags                 # count and tag, parents included
-knapp graph FILE [--hops N] [--dot]
+knapp graph FILE [--hops N] [--dot]   # the tree, or Graphviz
 knapp index [--rebuild] [--stats] [--watch]
 ```
 
@@ -486,14 +495,12 @@ src/
   index.rs      forward and back tables, resolution, cache
   watch.rs      notifier, incremental reindex
   render.rs     markdown to styled lines
-  graph.rs      local subgraph, layout, dot output, PNG frame
+  graph.rs      local subgraph, tree, layout, dot output, canvas image
   herdr.rs      context json, pane open, agent prompt, graphics calls
   send.rs       allowlist enforcement, prompt fencing
   search.rs     ripgrep and built-in full-text search
   editor.rs     editor choice and argv, OSC 52
   tui/
-assets/
-  font/         the embedded label font and its OFL license
 scripts/
   expected.py   writes tests/expected/ from the fixtures
   release.sh    cut a release from CHANGELOG.md
@@ -539,8 +546,8 @@ file.
    `knapp orphans`. Built.
 6. `send` with the allowlist and agent picker. Tests before the key binding.
    Built.
-7. Graph: tree fallback, then the graphics frame. PNG embeds in the detail
-   panel.
+7. Graph: `knapp graph`, the tree, then the canvas through pane graphics.
+   PNG embeds in the detail panel, as a second change.
 8. `open-pane`, `peek-selection`, the link handler, and the peek popup, with
    their manifest entries.
 9. Multiple roots.

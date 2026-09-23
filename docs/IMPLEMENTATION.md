@@ -806,41 +806,133 @@ to an agent doing other work.
 
 ## Step 7: graph and images
 
-- Subgraph: breadth-first over `forward` and `back` together, up to
-  `graph_hops`, capped at 200 nodes as the plan says.
-- Tree fallback: the open note, then inbound and outbound neighbours
-  indented by hop, marked `<-` and `->`.
-- `--dot`: `digraph knapp { "a.md" -> "b.md"; }`, escaping `"` and `\` in
-  paths.
-- Layout: Fruchterman-Reingold, 300 iterations, with starting positions
-  from a hash of each path and the open note pinned at the center. The same
-  input always gives the same layout, which tests can rely on.
-- Frame: the socket reply to `pane.graphics.info` gives `cell_width_px`,
-  `cell_height_px`, `pane_visible`, and `max_layers_per_pane` (16). The
-  pixmap is the detail panel's cells times the cell size. Draw edges, then
-  nodes (radius from log inbound count), then labels. Rasterize each label
-  with `fontdue` and blend it into the `tiny-skia` pixmap. Encode it with
-  `Pixmap::encode_png` (tiny-skia's `png-format` feature).
-- Socket client in `herdr.rs`: `UnixStream` to `HERDR_SOCKET_PATH`, one JSON
-  request per line, one JSON reply per line. Calls:
-  - `pane.graphics.info {pane_id}`
-  - `pane.graphics.set {pane_id, layer_id, format: "png", image_width, image_height, data_base64, placement: {viewport_col, viewport_row, grid_cols, grid_rows}}`
-  - `pane.graphics.clear {pane_id, layer_id}`
+Two changes, each checked in herdr and committed on its own: the graph
+first, then PNG embeds.
 
-  `pane_id` is `HERDR_PANE_ID`. `viewport_col` and `viewport_row` are the
-  detail panel's position inside the pane.
-- The graph uses layer `graph`. Clear it when leaving the graph, and redraw
-  on resize.
-- PNG embeds: read width and height from the IHDR chunk (bytes 16 to 23).
-  Scale the image to fit the panel width in cells and reserve that many
-  blank rendered lines. Place visible images on layers `img-0` to `img-13`,
-  clear them on scroll, and place again. Images past the layer budget show
-  the placeholder line.
-- Font: Noto Sans Regular in `assets/font/` with `OFL.txt`, loaded with
-  `include_bytes!`.
-- Tests: layout determinism, the node cap, `--dot` output against expected,
-  the IHDR reader on the fixture PNG, and the socket calls against a fake
-  socket server in the test that records requests.
+Dependency: `tiny-skia` (default features, for `png-format`), for
+antialiased edges and dots and PNG encoding. Labels are terminal text, so
+knapp embeds no font.
+
+### Pane graphics (herdr 0.9.1)
+
+- Socket client in `herdr.rs`: `UnixStream` to `HERDR_SOCKET_PATH`, one
+  JSON request per line, one JSON reply per line. Calls:
+  - `pane.graphics.info {pane_id}`: `cell_width_px`, `cell_height_px`,
+    `pane_visible`, `max_layers_per_pane` (16).
+  - `pane.graphics.set {pane_id, layer_id, z_index, format: "png", image_width, image_height, data_base64, placement: {viewport_col, viewport_row, grid_cols, grid_rows}}`
+  - `pane.graphics.clear {pane_id, layer_id}`
+- `pane_id` is `HERDR_PANE_ID`; a pane without it (outside herdr, or a
+  popup) has no graphics. An error reply (`feature_disabled`) turns
+  graphics off for the session.
+- Herdr passes `z_index` straight to the kitty placement's `z`
+  (`src/kitty_graphics.rs`), and the kitty protocol draws a negative `z`
+  under text. knapp uses `z_index` −1, so text written in the cells shows
+  over the image.
+- `viewport_col` and `viewport_row` are relative to the pane and may be
+  negative; herdr clips the placement. `grid_cols` and `grid_rows` size the
+  image in cells; the terminal scales it.
+- Query `pane.graphics.info` at start and on every resize event (the cell
+  size follows the font size).
+
+### Effects
+
+`App` never touches the socket. Each draw leaves `app.placements`: the
+layers the screen should have, as `(layer_id, content key, viewport rect in
+cells)`. The loop compares them with what it last sent and sends `set` for
+new or moved layers and `clear` for gone ones; unchanged layers are not
+sent again. Content (the PNG) is built by the loop and cached by key, since
+`App` has no cell size in pixels. The help overlay and the picker empty
+`app.placements`.
+
+### Graph (graph.rs)
+
+```rust
+pub struct Node { pub id: FileId, pub hop: u32, pub parent: Option<FileId>, pub mark: Mark }
+pub enum Mark { Root, Out, In, Both }
+pub struct Local { pub nodes: Vec<Node>, pub edges: Vec<(FileId, FileId)>, pub left_out: usize }
+
+pub fn local(index: &Index, root: FileId, hops: u32, cap: Option<usize>) -> Local;
+pub fn tree(index: &Index, local: &Local) -> Vec<String>;      // the indented lines
+pub fn dot(index: &Index, local: &Local) -> String;
+pub fn layout(index: &Index, local: &Local, cols: u16, rows: u16) -> Vec<(u16, u16)>; // cell per node
+pub fn canvas(local: &Local, cells: &[(u16, u16)], cols: u16, rows: u16, cell_px: (u32, u32)) -> Vec<u8>; // PNG
+```
+
+- `local`: breadth-first from `root` over links in both directions, using
+  `forward` targets (resolved and the pick of ambiguous links) and `back`.
+  A node's `parent` is the node that first reached it, children visited in
+  path order. `edges` are forward links between included nodes, each once.
+  Self-links are dropped. The cap cuts the farthest hop first, fewest links
+  first within it.
+- `tree`: the root's path, then each node indented two spaces per hop
+  under its parent with its mark: `-> alpha.md` at hop 1 is indented two spaces. `left_out > 0` adds
+  `(N more not shown)`.
+- `dot`: `digraph knapp {`, one quoted node per line sorted by path, then
+  one `"a" -> "b";` per edge sorted, then `}`. `"` and `\` in paths are
+  escaped.
+- `layout`: Fruchterman-Reingold, 300 iterations, starting positions from a
+  hash of each path, the root pinned at the center; positions rounded to
+  cells, nudged so no two nodes share a cell. The same input always gives
+  the same layout.
+- `canvas`: a `tiny-skia` pixmap of `cols × cell_width` by
+  `rows × cell_height`, transparent; edges as 1.5 px lines, dots at each
+  node's cell centre with radius from `ln(inbound + 1)`, the root in
+  another color. `encode_png`.
+
+### Graph page (tui)
+
+- `g` opens `Page::Graph(rel)` for the open note; history treats it like
+  any page.
+- The detail is built by the app: the canvas rows (when graphics are on),
+  with each node's name written at its cell as a link hit, then a blank
+  line, then the tree with each name a hit. The canvas takes 60% of the
+  detail height, at least 10 rows, when graphics are on.
+- Placement: layer `graph`, over the canvas rows, moving with scroll.
+
+### `knapp graph`
+
+`knapp graph FILE [--root] [--hops N] [--dot]`: the tree (no cap), or
+Graphviz. `scripts/expected.py` computes the tree for every fixture note
+from its own links and backlinks, and `tests/cli.rs` compares.
+
+### Images (second change)
+
+- In `render.rs`, a `![[x.png]]` or `![](x.png)` that resolves to a PNG of
+  at most 8 MB, with graphics on, reserves rows instead of the placeholder:
+  width in cells is the panel width, capped at the image's own width in
+  cells; rows keep the aspect ratio in pixels. The width and height come
+  from the IHDR chunk (bytes 16 to 23), read once per file.
+- `Rendered` gains `images: Vec<ImageSlot { line, rows, cols, path }>`.
+- Placement: layers `img-0` to `img-13` for the visible slots in order,
+  content the file's bytes (format `png`). Slots past 14 keep the
+  placeholder line.
+
+### Tests
+
+- `tests/graph.rs`: `local` on `vault-broken` (the three-note cycle, the
+  orphan reaching `hub`), hop limits, the cap cutting the farthest hop, the
+  tree text, `dot` escaping, `layout` twice with the same result and no
+  shared cells, and `canvas` producing a PNG of the right size (decoded
+  with `tiny_skia::Pixmap::decode_png`).
+- `tests/cli.rs`: `graph` for every fixture note against `tests/expected/`.
+- `tests/pane.rs`: `g` shows the tree, `n` and `enter` open a node, and
+  `app.placements` holds `graph` with graphics on and nothing with them off
+  or with help open.
+- `tests/graphics.rs`: the socket calls against a fake socket server that
+  records the request lines and answers `pane.graphics.info`; `set` is not
+  resent for an unchanged layer; `clear` is sent when a layer goes.
+- Images: the IHDR reader on `vault-basic/img.png`, slot sizes, the 8 MB
+  cutoff, and the placeholder without graphics.
+
+### In herdr
+
+The screen cannot be captured from here, so the user looks:
+
+1. `g` on a note with links: dots and edges under the names, the open note
+   in the middle; `n` / `enter` open a node.
+2. Resize the pane and scroll: the image follows.
+3. `?` while the graph shows: the image goes; `esc`: it comes back.
+4. A note with a PNG embed shows the image in place of the placeholder.
 
 ## Step 8: actions, link handler, peek
 
