@@ -1,0 +1,5 @@
+b/same.md
+  <- b/linker.md
+    -> a/same.md
+  <- root.md
+    -> c/deep/same.md

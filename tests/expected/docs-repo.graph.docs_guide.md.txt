@@ -1,0 +1,4 @@
+docs/guide.md
+  <-> README.md
+    -> docs/my notes.md
+  <-> docs/api/ref.md

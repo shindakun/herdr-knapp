@@ -225,6 +225,9 @@ targets do not.
 
 With pane graphics, the canvas is an image of edges and dots placed under
 the pane's text (`z_index` −1), and the names are ordinary text over it.
+A name sits right of its dot when it fits, else left of it, else cut on the
+roomier side; one that would overlap another name is left off the canvas
+and still listed in the tree.
 The layout is force-directed with the open note in the middle and dots
 sized by inbound links. Without graphics (`feature_disabled`, no
 `HERDR_PANE_ID`, or the peek popup, which has no pane id), the canvas is
@@ -547,7 +550,7 @@ file.
 6. `send` with the allowlist and agent picker. Tests before the key binding.
    Built.
 7. Graph: `knapp graph`, the tree, then the canvas through pane graphics.
-   PNG embeds in the detail panel, as a second change.
+   Built. PNG embeds in the detail panel, as a second change: not built.
 8. `open-pane`, `peek-selection`, the link handler, and the peek popup, with
    their manifest entries.
 9. Multiple roots.

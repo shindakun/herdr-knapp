@@ -3,6 +3,7 @@
 pub mod app;
 pub mod ui;
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -131,6 +132,7 @@ fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
     let mut app = App::new(index, label, root.send_allow, theme);
     app.status = status;
     app.send_max_bytes = config.send_max_bytes;
+    app.graph_hops = config.graph_hops;
     Ok(Loaded {
         app,
         cache,
@@ -212,18 +214,29 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
         Err(e) => app.status = Some(format!("not watching for changes: {e}")),
     }
     let rg = search::find_rg();
+    let graphics = crate::herdr::Graphics::from_env();
+    let mut sync = Sync::default();
+    query_graphics(&graphics, &mut app);
     let mut search_cancel: Option<Arc<AtomicBool>> = None;
 
     loop {
         terminal
             .draw(|f| ui::draw(f, &mut app))
             .map_err(|e| format!("draw: {e}"))?;
+        if let Some(g) = &graphics {
+            if let Err(e) = sync.apply(g, &app.layers, app.cell_px) {
+                // feature_disabled and the like: no images for this session.
+                app.cell_px = None;
+                app.status = Some(format!("pane graphics off: {e}"));
+            }
+        }
         let Ok(ev) = rx.recv() else {
             break;
         };
         match ev {
             AppEvent::Term(Event::Key(k)) => app.key(k),
             AppEvent::Term(Event::Mouse(m)) => app.mouse(m),
+            AppEvent::Term(Event::Resize(..)) => query_graphics(&graphics, &mut app),
             AppEvent::Term(_) => {}
             AppEvent::Batch(b) => app.batch(&b),
             AppEvent::Results(generation, batch) => app.results(generation, batch),
@@ -321,10 +334,87 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
             break;
         }
     }
+    if let Some(g) = &graphics {
+        let _ = sync.apply(g, &[], None);
+    }
     if let Some(c) = &cache {
         let _ = app.index.save_cache(c);
     }
     Ok(())
+}
+
+fn query_graphics(graphics: &Option<crate::herdr::Graphics>, app: &mut App) {
+    let Some(g) = graphics else {
+        return;
+    };
+    match g.info() {
+        Ok(info) if info.cell_px.0 > 0 && info.cell_px.1 > 0 => app.cell_px = Some(info.cell_px),
+        Ok(_) => app.cell_px = None,
+        Err(e) => {
+            app.cell_px = None;
+            app.status = Some(format!("pane graphics off: {e}"));
+        }
+    }
+}
+
+type CellPx = (u32, u32);
+/// A PNG and its size in pixels.
+type Png = (Vec<u8>, (u32, u32));
+
+/// What herdr has been told: layer name to (content key, placement). A layer
+/// is sent again only when its content or placement changes.
+#[derive(Default)]
+struct Sync {
+    sent: HashMap<String, (String, crate::herdr::Placement)>,
+    pngs: HashMap<(String, CellPx), Png>,
+}
+
+impl Sync {
+    fn apply(
+        &mut self,
+        g: &crate::herdr::Graphics,
+        layers: &[app::Layer],
+        cell_px: Option<(u32, u32)>,
+    ) -> Result<(), String> {
+        let wanted: Vec<&app::Layer> = match cell_px {
+            Some(_) => layers.iter().collect(),
+            None => Vec::new(),
+        };
+        let gone: Vec<String> = self
+            .sent
+            .keys()
+            .filter(|name| !wanted.iter().any(|l| &l.name == *name))
+            .cloned()
+            .collect();
+        for name in gone {
+            self.sent.remove(&name);
+            g.clear(&name)?;
+        }
+        for layer in wanted {
+            let now = (layer.key.clone(), layer.at);
+            if self.sent.get(&layer.name) == Some(&now) {
+                continue;
+            }
+            let px = cell_px.expect("graphics are on");
+            let (png, size) = match self.pngs.get(&(layer.key.clone(), px)) {
+                Some(done) => done.clone(),
+                None => {
+                    let png = crate::graph::canvas(&layer.canvas, px)?;
+                    let size = crate::herdr::png_size(&png).ok_or("canvas: not a PNG")?;
+                    // Keys change with every resize and refresh; keep a few.
+                    if self.pngs.len() >= 8 {
+                        self.pngs.clear();
+                    }
+                    self.pngs
+                        .insert((layer.key.clone(), px), (png.clone(), size));
+                    (png, size)
+                }
+            };
+            g.set(&layer.name, &png, size, layer.at)?;
+            self.sent.insert(layer.name.clone(), now);
+        }
+        Ok(())
+    }
 }
 
 /// Suspends the TUI, runs the editor in the root, and restores the TUI. The

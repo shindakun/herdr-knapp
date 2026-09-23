@@ -1,0 +1,6 @@
+hub.md
+  -> loop-a.md
+    -> loop-b.md
+    <- loop-c.md
+  <- orphan.md
+  -> ref.md

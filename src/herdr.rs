@@ -144,3 +144,130 @@ pub fn workspace_dir(ctx: &Context, agents: &[Agent]) -> Option<PathBuf> {
         .and_then(|w| pick_agent(agents, w, ctx.focused_pane_id.as_deref()));
     usable(agent.and_then(|a| a.cwd.as_deref())).or_else(|| usable(ctx.workspace_cwd.as_deref()))
 }
+
+/// Pane graphics over herdr's socket: one JSON request per line, one JSON
+/// reply per line. The CLI has no graphics commands.
+pub struct Graphics {
+    socket: PathBuf,
+    pane: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphicsInfo {
+    pub cell_px: (u32, u32),
+    pub visible: bool,
+}
+
+/// Where a layer goes, in cells relative to the pane. Rows and columns may
+/// be negative; herdr clips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Placement {
+    pub col: i32,
+    pub row: i32,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+impl Graphics {
+    /// Needs `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`; a popup has no pane id.
+    pub fn from_env() -> Option<Self> {
+        Some(Self {
+            socket: PathBuf::from(var("HERDR_SOCKET_PATH")?),
+            pane: var("HERDR_PANE_ID")?,
+        })
+    }
+
+    pub fn new(socket: PathBuf, pane: String) -> Self {
+        Self { socket, pane }
+    }
+
+    fn call(
+        &self,
+        method: &str,
+        mut params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        use std::io::{BufRead, BufReader, Write};
+        params["pane_id"] = serde_json::Value::String(self.pane.clone());
+        let request = serde_json::json!({"id": "knapp", "method": method, "params": params});
+        let mut stream = std::os::unix::net::UnixStream::connect(&self.socket)
+            .map_err(|e| format!("{}: {e}", self.socket.display()))?;
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .map_err(|e| e.to_string())?;
+        let mut line = request.to_string();
+        line.push('\n');
+        stream
+            .write_all(line.as_bytes())
+            .map_err(|e| format!("{method}: {e}"))?;
+        let mut reply = String::new();
+        BufReader::new(&stream)
+            .read_line(&mut reply)
+            .map_err(|e| format!("{method}: {e}"))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&reply).map_err(|e| format!("{method}: {e}"))?;
+        if let Some(err) = v.get("error") {
+            let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("error");
+            let message = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
+            return Err(format!("{code}: {message}"));
+        }
+        Ok(v.get("result").cloned().unwrap_or_default())
+    }
+
+    pub fn info(&self) -> Result<GraphicsInfo, String> {
+        let r = self.call("pane.graphics.info", serde_json::json!({}))?;
+        let num = |k: &str| r.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        Ok(GraphicsInfo {
+            cell_px: (num("cell_width_px"), num("cell_height_px")),
+            visible: r
+                .get("pane_visible")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        })
+    }
+
+    /// Places a PNG on `layer` under the pane's text (`z_index` -1).
+    pub fn set(
+        &self,
+        layer: &str,
+        png: &[u8],
+        size: (u32, u32),
+        at: Placement,
+    ) -> Result<(), String> {
+        self.call(
+            "pane.graphics.set",
+            serde_json::json!({
+                "layer_id": layer,
+                "z_index": -1,
+                "format": "png",
+                "image_width": size.0,
+                "image_height": size.1,
+                "data_base64": crate::editor::base64(png),
+                "placement": {
+                    "viewport_col": at.col,
+                    "viewport_row": at.row,
+                    "grid_cols": at.cols,
+                    "grid_rows": at.rows,
+                },
+            }),
+        )
+        .map(drop)
+    }
+
+    pub fn clear(&self, layer: &str) -> Result<(), String> {
+        self.call(
+            "pane.graphics.clear",
+            serde_json::json!({"layer_id": layer}),
+        )
+        .map(drop)
+    }
+}
+
+/// Width and height from a PNG's IHDR chunk.
+pub fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    Some((w, h))
+}

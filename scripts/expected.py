@@ -271,6 +271,38 @@ def tag_lines(tags_by_note):
     return "".join(walk(None))
 
 
+def graph_lines(root, notes, outgoing, incoming, hops=2):
+    """The local graph tree: breadth-first over links both ways, each file
+    under the file that first reached it, children in path order."""
+    seen = {root: (0, None, "")}
+    order = [root]
+    queue = [root]
+    while queue:
+        cur = queue.pop(0)
+        hop = seen[cur][0]
+        if hop >= hops:
+            continue
+        out = outgoing.get(cur, set())
+        inn = incoming.get(cur, set())
+        for n in sorted(out | inn):
+            if n in seen:
+                continue
+            mark = "<->" if n in out and n in inn else "->" if n in out else "<-"
+            seen[n] = (hop + 1, cur, mark)
+            order.append(n)
+            queue.append(n)
+    lines = [root]
+
+    def walk(parent):
+        for n in sorted(k for k in order if seen[k][1] == parent):
+            hop, _, mark = seen[n]
+            lines.append(f"{'  ' * hop}{mark} {n}")
+            walk(n)
+
+    walk(root)
+    return "".join(line + "\n" for line in lines)
+
+
 def file_part(path):
     return path.replace("/", "_")
 
@@ -316,6 +348,15 @@ def generate(out):
             with open(os.path.join(out, f"{fixture}.backlinks.{file_part(target)}.txt"), "w") as f:
                 for source, line, text in sorted(hits):
                     f.write(f"{source}:{line}\t{text}\n")
+
+        outgoing, incoming = {}, {}
+        for r in records:
+            if r["found"] and r["found"][0] != r["source"]:
+                outgoing.setdefault(r["source"], set()).add(r["found"][0])
+                incoming.setdefault(r["found"][0], set()).add(r["source"])
+        for note in (p for p in vault.files if p.lower().endswith(".md")):
+            with open(os.path.join(out, f"{fixture}.graph.{file_part(note)}.txt"), "w") as f:
+                f.write(graph_lines(note, vault.files, outgoing, incoming))
 
         with open(os.path.join(out, f"{fixture}.tags.txt"), "w") as f:
             f.write(tag_lines(TAGS.get(fixture, {})))

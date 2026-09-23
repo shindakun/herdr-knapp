@@ -119,10 +119,12 @@ fn fixtures_match_expected_output() {
             let part = rel.replace('/', "_");
             let path = format!("{root}/{rel}");
             if rel.ends_with(".md") {
-                check(
-                    vec!["links".into(), "--root".into(), root.clone(), path.clone()],
-                    format!("{fixture}.links.{part}.txt"),
-                );
+                for command in ["links", "graph"] {
+                    check(
+                        vec![command.into(), "--root".into(), root.clone(), path.clone()],
+                        format!("{fixture}.{command}.{part}.txt"),
+                    );
+                }
             }
             check(
                 vec!["backlinks".into(), "--root".into(), root.clone(), path],

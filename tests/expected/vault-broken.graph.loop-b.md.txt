@@ -1,0 +1,5 @@
+loop-b.md
+  <- loop-a.md
+    <- hub.md
+    <- ref.md
+  -> loop-c.md

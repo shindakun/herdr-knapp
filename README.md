@@ -5,9 +5,10 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 to 6 of `docs/PLAN.md` are built: the link index, its
-cache and watcher, the CLI, and the notes pane with editing, search, tags,
-unresolved links, orphans, recent notes, and sending notes to an agent. The `open` action and its
+Status: steps 1 to 6 and the graph of step 7 are built: the link index,
+its cache and watcher, the CLI, and the notes pane with editing, search,
+tags, unresolved links, orphans, recent notes, sending notes to an agent,
+and the local graph. Images in notes are not built yet. The `open` action and its
 keybinding come in a later step; until then, open the pane with:
 
 ```sh
@@ -30,6 +31,9 @@ the pane shows one side at a time; `h` / `l` switch.
   `$EDITOR`, so set `editor` in the config.
 - `y` copies the note's path and `Y` a `[[wikilink]]` to it, through the
   terminal's clipboard (OSC 52), which works over SSH under Herdr.
+- `g` shows the open note's local graph: the linked notes laid out around
+  it, drawn with Herdr's pane graphics where the terminal supports them,
+  above the same notes as a tree. Every name opens its note.
 - `/` searches the notes as you type, with `rg` when it is on `PATH`.
   Results are notes the tree shows; `.gitignore` does not hide any.
 - `s` sends the open note to an agent in the workspace, and `S` sends it
@@ -54,6 +58,7 @@ knapp backlinks FILE [--root NAME|PATH]
 knapp unresolved [--root NAME|PATH] [--json]
 knapp orphans [--root NAME|PATH]
 knapp tags [--root NAME|PATH]
+knapp graph FILE [--root NAME|PATH] [--hops N] [--dot]
 knapp index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
 ```
 
@@ -67,6 +72,9 @@ knapp index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
 - `orphans` lists notes no other note links to.
 - `tags` prints each tag with the number of notes carrying it, parents
   counting their children. Tags compare without case, as in Obsidian.
+- `graph` prints the notes within `--hops` links of FILE (default 2) as a
+  tree, each marked `->` (FILE's side links to it), `<-` (it links back),
+  or `<->`; `--dot` prints Graphviz instead.
 - `index` loads the root and prints counts. `--stats` adds timings and
   cache use, `--rebuild` ignores the cache, and `--watch` keeps running and
   prints a line for each change to the tree.

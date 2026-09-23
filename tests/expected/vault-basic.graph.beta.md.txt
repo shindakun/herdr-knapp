@@ -1,0 +1,5 @@
+beta.md
+  -> alpha.md
+  <- index.md
+    <-> dir/deep.md
+    -> img.png

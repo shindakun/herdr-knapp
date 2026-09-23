@@ -1,0 +1,3 @@
+docs/api/ref.md
+  <-> docs/guide.md
+    <-> README.md

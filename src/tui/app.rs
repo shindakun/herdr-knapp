@@ -14,7 +14,8 @@ use ratatui::widgets::ListState;
 
 use std::path::PathBuf;
 
-use crate::herdr::Agent;
+use crate::graph::{self, CanvasSpec};
+use crate::herdr::{Agent, Placement};
 use crate::index::{block_fragment, key, FileId, Index, Resolved};
 use crate::render::{self, LinkState, Theme};
 use crate::scan::Kind;
@@ -111,6 +112,8 @@ pub enum Page {
     /// An ambiguous target, by its `key()`.
     Ambiguous(String),
     Attachment(String),
+    /// The local graph around a note.
+    Graph(String),
 }
 
 struct Visit {
@@ -140,6 +143,18 @@ pub struct Detail {
     pub lines: Vec<Line<'static>>,
     pub source_line: Vec<u32>,
     pub hits: Vec<Hit>,
+    /// The graph canvas under the first rows, with its content key.
+    pub canvas: Option<(String, Rc<CanvasSpec>)>,
+}
+
+/// An image layer the screen should have: its name, a key that changes when
+/// its content does, what to draw, and where.
+#[derive(Debug, Clone)]
+pub struct Layer {
+    pub name: String,
+    pub key: String,
+    pub canvas: Rc<CanvasSpec>,
+    pub at: Placement,
 }
 
 #[derive(Debug, Clone)]
@@ -194,7 +209,14 @@ pub struct App {
     /// A source line to scroll to, and a link to select, once the page is
     /// rendered at a known width.
     jump: Option<(u32, Option<usize>)>,
-    details: HashMap<(Page, u16, bool), Rc<Detail>>,
+    details: HashMap<(Page, u16, u16, bool), Rc<Detail>>,
+    /// Terminal cell size in pixels when pane graphics are on.
+    pub cell_px: Option<(u32, u32)>,
+    pub graph_hops: u32,
+    /// Image layers for the last draw; the event loop syncs them to herdr.
+    pub layers: Vec<Layer>,
+    /// Bumped on every refresh, so image keys change with the index.
+    refreshes: u64,
     rows: Option<Rc<Vec<Row>>>,
     tree: Dir,
     effects: Vec<Effect>,
@@ -246,6 +268,10 @@ impl App {
             generation: 0,
             results: Vec::new(),
             send_max_bytes: 65536,
+            cell_px: None,
+            graph_hops: 2,
+            layers: Vec::new(),
+            refreshes: 0,
             pending_send: None,
             picker: None,
             draft: None,
@@ -672,6 +698,10 @@ impl App {
                 _ => self.index.root.join(&rel).display().to_string(),
             },
             Page::Unresolved(target) | Page::Ambiguous(target) => target,
+            Page::Graph(rel) => match self.index.id(&rel) {
+                Some(id) if wikilink => format!("[[{}]]", self.index.shortest_link(id)),
+                _ => self.index.root.join(&rel).display().to_string(),
+            },
             Page::Summary => {
                 self.status = Some("open a note to copy it".into());
                 return;
@@ -834,11 +864,11 @@ impl App {
     /// The current page rendered at `width`, with any pending jump applied.
     pub fn detail(&mut self, width: u16, height: u16) -> Rc<Detail> {
         let page = self.page().clone();
-        let cache_key = (page.clone(), width, self.fold_frontmatter);
+        let cache_key = (page.clone(), width, height, self.fold_frontmatter);
         let detail = match self.details.get(&cache_key) {
             Some(d) => d.clone(),
             None => {
-                let d = Rc::new(self.build_detail(&page, width));
+                let d = Rc::new(self.build_detail(&page, width, height));
                 self.details.insert(cache_key, d.clone());
                 d
             }
@@ -861,12 +891,13 @@ impl App {
         detail
     }
 
-    fn build_detail(&self, page: &Page, width: u16) -> Detail {
+    fn build_detail(&self, page: &Page, width: u16, height: u16) -> Detail {
         match page {
             Page::Summary => self.summary(),
             Page::Note(rel) => self.note_detail(rel, width),
             Page::Unresolved(target) => self.unresolved_detail(target),
             Page::Ambiguous(key) => self.ambiguous_detail(key),
+            Page::Graph(rel) => self.graph_detail(rel, width, height),
             Page::Attachment(rel) => self.attachment_detail(rel),
         }
     }
@@ -878,6 +909,7 @@ impl App {
             lines,
             source_line: vec![1; n],
             hits,
+            canvas: None,
         }
     }
 
@@ -952,6 +984,7 @@ impl App {
                     target: HitTarget::Link(h.link),
                 })
                 .collect(),
+            canvas: None,
         }
     }
 
@@ -1054,6 +1087,133 @@ impl App {
         self.text_detail(format!("ambiguous: {}", g.shown), lines, hits)
     }
 
+    /// The canvas (with graphics) and the tree. Names in both are links.
+    fn graph_detail(&self, rel: &str, width: u16, height: u16) -> Detail {
+        let Some(id) = self.index.id(rel) else {
+            return self.text_detail(
+                format!("graph: {rel}"),
+                vec![Line::from(format!("deleted: {rel}"))],
+                Vec::new(),
+            );
+        };
+        let local = graph::local(&self.index, id, self.graph_hops, Some(200));
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        let underline = Style::new().add_modifier(Modifier::UNDERLINED);
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut hits = Vec::new();
+        let mut canvas = None;
+
+        if self.cell_px.is_some() && width >= 20 {
+            let rows = (u32::from(height) * 60 / 100)
+                .max(10)
+                .min(u32::from(height)) as u16;
+            let cells = graph::layout(&self.index, &local, width, rows);
+            // Names go right of their dot; one that would overlap another is
+            // left out of the canvas (the tree below lists every node).
+            let mut grid = vec![vec![false; usize::from(width)]; usize::from(rows)];
+            let mut labels: Vec<(u16, u16, String, usize)> = Vec::new();
+            for (i, (node, &(x, y))) in local.nodes.iter().zip(&cells).enumerate() {
+                let file = &self.index.files[node.id].rel;
+                let name = file.rsplit('/').next().unwrap_or(file);
+                let name = name.strip_suffix(".md").unwrap_or(name);
+                // Right of the dot when the name fits there, else left of
+                // it, else cut on the roomier side.
+                let full = unicode_width::UnicodeWidthStr::width(name);
+                let (x, w) = (usize::from(x), usize::from(width));
+                let right = w.saturating_sub(x + 1);
+                let (start, name) = if full <= right {
+                    (x + 1, name.to_string())
+                } else if full <= x {
+                    (x - full, name.to_string())
+                } else if right >= x {
+                    (x + 1, render::cut(name, right))
+                } else {
+                    (0, render::cut(name, x))
+                };
+                let len = unicode_width::UnicodeWidthStr::width(name.as_str());
+                let row = &mut grid[usize::from(y)];
+                if len == 0 || row[start..start + len].iter().any(|&taken| taken) {
+                    continue;
+                }
+                row[start..start + len].fill(true);
+                labels.push((start as u16, y, name, i));
+            }
+            for y in 0..rows {
+                let mut row: Vec<(u16, u16, &String, usize)> = labels
+                    .iter()
+                    .filter(|l| l.1 == y)
+                    .map(|l| (l.0, l.1, &l.2, l.3))
+                    .collect();
+                row.sort_by_key(|l| l.0);
+                let mut spans = Vec::new();
+                let mut col = 0usize;
+                for (x, _, name, i) in row {
+                    let start = usize::from(x);
+                    spans.push(Span::raw(" ".repeat(start - col)));
+                    let root = local.nodes[i].mark == graph::Mark::Root;
+                    spans.push(Span::styled(
+                        name.clone(),
+                        if root {
+                            bold.add_modifier(Modifier::UNDERLINED)
+                        } else {
+                            underline
+                        },
+                    ));
+                    let w = unicode_width::UnicodeWidthStr::width(name.as_str());
+                    hits.push(Hit {
+                        line: lines.len(),
+                        cols: start as u16..(start + w) as u16,
+                        target: HitTarget::Open {
+                            rel: self.index.files[local.nodes[i].id].rel.clone(),
+                            line: 1,
+                        },
+                    });
+                    col = start + w;
+                }
+                lines.push(Line::from(spans));
+            }
+            lines.push(Line::default());
+            let spec = graph::spec(&self.index, &local, &cells, width, rows);
+            let key = format!("graph:{rel}:{width}x{rows}:{}", self.refreshes);
+            canvas = Some((key, Rc::new(spec)));
+        }
+
+        for line in graph::tree(&self.index, &local) {
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            let (mark, path) = match trimmed.split_once(' ') {
+                Some((m, p)) if m.starts_with('-') || m.starts_with('<') => (format!("{m} "), p),
+                _ => (String::new(), trimmed),
+            };
+            if self.index.id(path).is_none() {
+                lines.push(Line::from(Span::styled(line.clone(), self.theme.dim())));
+                continue;
+            }
+            let start = indent + mark.chars().count();
+            hits.push(Hit {
+                line: lines.len(),
+                cols: start as u16..(start + path.chars().count()) as u16,
+                target: HitTarget::Open {
+                    rel: path.to_string(),
+                    line: 1,
+                },
+            });
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(indent)),
+                Span::styled(mark, self.theme.dim()),
+                Span::styled(path.to_string(), underline),
+            ]));
+        }
+        let n = lines.len();
+        Detail {
+            title: format!("graph: {rel}"),
+            lines,
+            source_line: vec![1; n],
+            hits,
+            canvas,
+        }
+    }
+
     fn attachment_detail(&self, rel: &str) -> Detail {
         let size = std::fs::metadata(self.index.root.join(rel)).map_or(0, |m| m.len());
         let kind = rel.rsplit_once('.').map_or("file", |(_, ext)| ext);
@@ -1086,7 +1246,9 @@ impl App {
 
     fn page_exists(&self, page: &Page) -> bool {
         match page {
-            Page::Note(rel) | Page::Attachment(rel) => self.index.id(rel).is_some(),
+            Page::Note(rel) | Page::Attachment(rel) | Page::Graph(rel) => {
+                self.index.id(rel).is_some()
+            }
             _ => true,
         }
     }
@@ -1341,6 +1503,11 @@ impl App {
             KeyCode::Char('o') => self.edit(),
             KeyCode::Char('y') => self.copy(false),
             KeyCode::Char('Y') => self.copy(true),
+            KeyCode::Char('g') => match self.page().clone() {
+                Page::Note(rel) => self.navigate(Page::Graph(rel), None),
+                Page::Graph(_) => {}
+                _ => self.status = Some("g shows a note's graph; open a note".into()),
+            },
             KeyCode::Char('s') => self.start_send(false),
             KeyCode::Char('S') => self.start_send(true),
             KeyCode::Char('f') => {
@@ -1427,6 +1594,7 @@ impl App {
     pub fn batch(&mut self, touched: &BTreeSet<String>) {
         match self.index.refresh(touched) {
             Ok(Some(change)) => {
+                self.refreshes += 1;
                 self.details.clear();
                 self.selected_hit = None;
                 self.build_tree();
@@ -1464,6 +1632,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("o", "open the note in the editor"),
     ("y Y", "copy the path, copy a [[wikilink]]"),
     ("s S", "send to an agent, with backlinks; enter sends"),
+    ("g", "the note's local graph"),
     ("?", "this help"),
     ("esc", "close help; focus the list"),
     ("q, ctrl-c", "quit"),

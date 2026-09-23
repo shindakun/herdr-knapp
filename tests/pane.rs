@@ -553,3 +553,53 @@ fn several_agents_open_a_picker_at_the_last_one() {
     p.app.agents(Err("sending needs herdr".into()), None);
     assert!(p.screen().contains("not sent: sending needs herdr"));
 }
+
+#[test]
+fn graph_page_without_graphics_is_the_tree() {
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 20);
+    p.keys("j\ng"); // alpha.md, then its graph
+    assert_eq!(p.app.page(), &Page::Graph("alpha.md".into()));
+    let screen = p.screen();
+    assert!(screen.contains("graph: alpha.md"), "{screen}");
+    assert!(screen.contains("<- beta.md"), "{screen}");
+    assert!(screen.contains("<-> index.md"), "{screen}");
+    assert!(p.app.layers.is_empty());
+    // Names are links.
+    p.keys("ln\n");
+    assert_eq!(p.app.page(), &Page::Note("alpha.md".into()));
+}
+
+#[test]
+fn graph_page_with_graphics_has_a_canvas_layer() {
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 30);
+    p.app.cell_px = Some((8, 16));
+    p.keys("j\ng");
+    p.draw();
+    assert_eq!(p.app.layers.len(), 1);
+    let layer = &p.app.layers[0];
+    assert_eq!(layer.name, "graph");
+    assert_eq!(layer.canvas.dots.len(), 5);
+    // The canvas sits under the detail's first content row.
+    assert_eq!((layer.at.row, layer.at.cols), (2, layer.canvas.cols));
+    let screen = p.screen();
+    for name in ["alpha", "beta", "index", "deep", "img.png"] {
+        assert!(screen.contains(name), "{name} missing:\n{screen}");
+    }
+    // Help hides the image; closing it brings it back.
+    p.keys("?");
+    assert!(p.app.layers.is_empty());
+    p.key(KeyCode::Esc);
+    assert_eq!(p.app.layers.len(), 1);
+
+    // In a short pane the page scrolls, and the image moves with it.
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 16);
+    p.app.cell_px = Some((8, 16));
+    p.keys(
+        "j
+gl",
+    );
+    assert_eq!(p.app.layers[0].at.row, 2);
+    p.keys("j");
+    assert_eq!(p.app.scroll, 1);
+    assert_eq!(p.app.layers[0].at.row, 1);
+}

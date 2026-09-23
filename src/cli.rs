@@ -17,6 +17,8 @@ commands:
   unresolved [--root NAME|PATH] [--json]  unresolved and ambiguous targets
   orphans [--root NAME|PATH]              notes nothing links to
   tags [--root NAME|PATH]                 tags with note counts
+  graph FILE [--root NAME|PATH] [--hops N] [--dot]
+                                          the local graph as a tree, or Graphviz
   pane [--root NAME|PATH]                 browse the notes in a terminal pane
   index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
                                           load the root and write the cache
@@ -27,6 +29,7 @@ commands:
 struct Args {
     file: Option<String>,
     root: Option<String>,
+    hops: Option<u32>,
     flags: BTreeSet<&'static str>,
 }
 
@@ -35,6 +38,14 @@ fn parse_args(args: &[String], wants_file: bool, flags: &[&'static str]) -> Resu
     let mut out = Args::default();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
+        if arg == "--hops" && flags.contains(&"--hops") {
+            let v = it.next().ok_or("--hops needs a value")?;
+            out.hops = Some(
+                v.parse()
+                    .map_err(|_| format!("--hops: not a number: {v}"))?,
+            );
+            continue;
+        }
         if let Some(flag) = flags.iter().find(|f| **f == arg) {
             out.flags.insert(flag);
             continue;
@@ -360,4 +371,26 @@ fn stats_text(index: &Index, stats: &LoadStats, cache_write_ms: f64) -> String {
 pub fn pane(args: &[String]) -> Result<(), String> {
     let args = parse_args(args, false, &[])?;
     crate::tui::run(args.root.as_deref())
+}
+
+pub fn graph(args: &[String]) -> Result<(), String> {
+    let args = parse_args(args, true, &["--hops", "--dot"])?;
+    let hops = match args.hops {
+        Some(h) => h,
+        None => Config::load()?.graph_hops,
+    };
+    let Opened { index, rel, .. } = open(&args)?;
+    let id = file_id(&index, &rel.expect("graph takes a file"))?;
+    let local = crate::graph::local(&index, id, hops, None);
+    if args.flags.contains("--dot") {
+        print!("{}", crate::graph::dot(&index, &local));
+    } else {
+        let mut out = String::new();
+        for line in crate::graph::tree(&index, &local) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        print!("{out}");
+    }
+    Ok(())
 }

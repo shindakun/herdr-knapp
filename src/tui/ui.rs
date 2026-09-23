@@ -6,12 +6,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, Paragraph};
 use ratatui::Frame;
 
-use super::app::{App, Focus, Mode, HELP};
+use super::app::{App, Focus, Layer, Mode, HELP};
+use crate::herdr::Placement;
 
 /// Below this width the list and the note are shown one at a time.
 pub const NARROW: u16 = 80;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    app.layers.clear();
     let [header, body, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -192,6 +194,22 @@ fn draw_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .cloned()
         .collect();
     frame.render_widget(Paragraph::new(visible), content);
+
+    // The canvas image sits under the text, so overlays drawn in cells would
+    // show it through; leave it out while one is open.
+    if let (Some((key, spec)), None, false) = (&detail.canvas, &app.picker, app.help) {
+        app.layers.push(Layer {
+            name: "graph".into(),
+            key: key.clone(),
+            canvas: spec.clone(),
+            at: Placement {
+                col: i32::from(content.x),
+                row: i32::from(content.y) - app.scroll as i32,
+                cols: spec.cols,
+                rows: spec.rows,
+            },
+        });
+    }
 
     if let Some(hit) = app.selected_hit.and_then(|i| detail.hits.get(i)) {
         let Some(row) = hit.line.checked_sub(app.scroll) else {

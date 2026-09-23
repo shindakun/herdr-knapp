@@ -833,12 +833,14 @@ knapp embeds no font.
   image in cells; the terminal scales it.
 - Query `pane.graphics.info` at start and on every resize event (the cell
   size follows the font size).
+- `herdr plugin pane open` without `--target-pane` opens in the focused
+  workspace, which may not be the one the command ran from. A split needs
+  `--target-pane <id>`; `--workspace` alone is refused for a split.
 
 ### Effects
 
-`App` never touches the socket. Each draw leaves `app.placements`: the
-layers the screen should have, as `(layer_id, content key, viewport rect in
-cells)`. The loop compares them with what it last sent and sends `set` for
+`App` never touches the socket. Each draw leaves `app.layers`: the
+layers the screen should have, as `Layer { name, key, canvas, at }`. The loop compares them with what it last sent and sends `set` for
 new or moved layers and `clear` for gone ones; unchanged layers are not
 sent again. Content (the PNG) is built by the loop and cached by key, since
 `App` has no cell size in pixels. The help overlay and the picker empty
@@ -888,6 +890,9 @@ pub fn canvas(local: &Local, cells: &[(u16, u16)], cols: u16, rows: u16, cell_px
   line, then the tree with each name a hit. The canvas takes 60% of the
   detail height, at least 10 rows, when graphics are on.
 - Placement: layer `graph`, over the canvas rows, moving with scroll.
+- Labels: right of the dot when the name fits, else left of it (ending
+  next to the dot), else cut with `…` on the roomier side. A label that
+  would overlap another is left off the canvas; the tree lists it.
 
 ### `knapp graph`
 
@@ -915,12 +920,13 @@ from its own links and backlinks, and `tests/cli.rs` compares.
   shared cells, and `canvas` producing a PNG of the right size (decoded
   with `tiny_skia::Pixmap::decode_png`).
 - `tests/cli.rs`: `graph` for every fixture note against `tests/expected/`.
-- `tests/pane.rs`: `g` shows the tree, `n` and `enter` open a node, and
-  `app.placements` holds `graph` with graphics on and nothing with them off
-  or with help open.
+- `tests/pane.rs`: `g` shows the tree, `n` and `enter` open a node,
+  `app.layers` holds `graph` with graphics on and nothing with them off or
+  with help open, and the layer's row follows scroll in a short pane.
 - `tests/graphics.rs`: the socket calls against a fake socket server that
-  records the request lines and answers `pane.graphics.info`; `set` is not
-  resent for an unchanged layer; `clear` is sent when a layer goes.
+  records the request lines and answers `pane.graphics.info`, and errors
+  coming back as `code: message`. Resending only changed layers is the
+  event loop's `Sync`, checked in herdr.
 - Images: the IHDR reader on `vault-basic/img.png`, slot sizes, the 8 MB
   cutoff, and the placeholder without graphics.
 
