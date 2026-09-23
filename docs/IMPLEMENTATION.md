@@ -510,26 +510,104 @@ The step closes after this runs in Herdr:
 
 ## Step 4: editor, copy, search
 
-- Editor: config `editor`, then `$VISUAL`, then `$EDITOR`, split on
-  whitespace (`code -w` works; quoting is not supported). The line argument
-  depends on the command's basename: `+LINE FILE` for `vi`, `vim`, `nvim`,
-  `nano`, `emacs`, `micro`, `kak`; `FILE:LINE` for `hx`; `-g FILE:LINE` for
-  `code`; just `FILE` for anything else. With no editor set, show a status
-  line.
-- Suspend: disable raw mode, leave the alternate screen, show the cursor,
-  run the editor with `Command::status`, then restore and call
-  `terminal.clear()` to force a full redraw.
-- Copy: write `ESC ] 52 ; c ; <base64> BEL` to stdout. Herdr accepts up to
-  192 KiB. The base64 encoder is a few lines of code; no crate.
-- `Y`: the shortest trailing part of the note's path, without `.md`, that
-  `resolve` from a note at the root sends to this note as `File` (not
-  `Ambiguous`). If none does, the full path.
-- Search: `rg --json --fixed-strings --smart-case --glob '*.md'` plus
-  `--glob '!<exclude>'` for each exclude, run in the root. Read `match`
-  records as they arrive. Without `rg`, scan notes with a case-insensitive
-  substring match (smart case: case-sensitive when the query has an
-  uppercase letter). Search runs in a thread; a new query kills the old
-  child.
+No new dependencies.
+
+### Effects
+
+`App` stays free of terminal and process work. Keys that need it push an
+`Effect`, and the event loop in `tui/mod.rs` carries it out:
+
+```rust
+pub enum Effect {
+    Edit { path: PathBuf, line: u32 },
+    Copy(String),
+    Search { generation: u64, query: String },
+}
+impl App { pub fn take_effects(&mut self) -> Vec<Effect>; }
+```
+
+Tests assert on effects; the loop is checked in herdr.
+
+### Editor
+
+- `editor_command(editor: &str, path: &Path, line: u32) -> Vec<String>`:
+  split on whitespace (`code -w` works; quoting is not supported). By the
+  command's basename: `vi`, `vim`, `nvim`, `nano`, `emacs`, `micro`, `kak`
+  get `+LINE FILE`; `hx` gets `FILE:LINE`; `code` gets `-g FILE:LINE`; any
+  other editor gets `FILE`.
+- Choice: config `editor`, `$VISUAL`, `$EDITOR`, then `vi`.
+- The line: the selected hit's source line, else the source line of the top
+  visible rendered line.
+- The input thread must not read the terminal while the editor runs, or it
+  takes the editor's keystrokes. It polls with a 50 ms timeout and checks a
+  shared `paused` flag between polls; when paused it sets an `idle` flag and
+  sleeps. The loop sets `paused`, waits for `idle`, then suspends:
+  `DisableMouseCapture`, `LeaveAlternateScreen`, `disable_raw_mode`, show
+  the cursor; runs the editor with `Command::status` in the root; then
+  `enable_raw_mode`, `EnterAlternateScreen`, `EnableMouseCapture`,
+  `terminal.clear()`, and clears `paused`. It does not call
+  `ratatui::init()` again, which would stack another panic hook.
+- A failed spawn shows `editor: <error>` on the status line.
+
+### Copy
+
+- `osc52(text) -> String`: `ESC ] 52 ; c ; <base64> BEL`, written straight
+  to stdout and flushed; ratatui's buffer is untouched. The base64 encoder
+  is a few lines; no crate. Herdr accepts up to 192 KiB.
+- `y`: the note's absolute path. `Y`: the shortest trailing part of its
+  path, without `.md`, that `Index::wikilink` from a note at the root
+  returns alone; else the full path. On an unresolved page, the target.
+  The status line says what was copied.
+
+### Search
+
+- `Mode::Search` joins the `tab` cycle after Forward. `/` switches to it and
+  opens the query line; while it is open, keys edit the query (characters,
+  `backspace`, `ctrl-u` to clear), and `enter` or `esc` closes it. Each
+  change pushes `Effect::Search` with a new generation.
+- `search.rs`: `run(root, query, exclude, sink)` streams
+  `(rel, line, text, match_ranges)` to `sink` until 500 results or the
+  query is replaced. With `rg` on `PATH`:
+  `rg --json --fixed-strings --smart-case --no-ignore --glob '*.md' --glob '!<dir>/**'`
+  for each `exclude` folder, in the root. Read `match` records: `path.text`
+  (skip `path.bytes`, which is a non-UTF-8 name), `line_number`,
+  `lines.text`, and `submatches[].start..end` (byte offsets into the line).
+  Without `rg`, read each indexed note and match lines, lowercasing both
+  sides when the query has no uppercase letter.
+- The loop runs one search thread at a time. A new query kills the old `rg`
+  child and bumps the generation; results from an old generation are
+  dropped. Results arrive as `AppEvent::Results(generation, rows)` in
+  batches.
+- The app keeps only results whose path is an indexed, visible note, and
+  highlights the match ranges.
+
+### Tests
+
+- `tests/editor.rs`: `editor_command` for each editor family, a command
+  with arguments, and the fallback order (config, `VISUAL`, `EDITOR`, `vi`).
+- `tests/pane.rs`: `o` pushes `Edit` with the selected link's line, and
+  with the top visible line when no link is selected; `o` on an attachment
+  sets a status and pushes nothing; `y` and `Y` push the right `Copy`;
+  typing `/alp` pushes three `Search` effects with rising generations, and
+  results from an old generation are ignored.
+- `tests/search.rs`: both backends on `vault-basic` and `vault-syntax`
+  give the same results: smart case, a match inside code, a file outside
+  the index (a dot folder, an excluded folder, a `.gitignore`d file in a
+  temp copy) never listed. The `rg` test is skipped when `rg` is not on
+  `PATH`.
+- `osc52` against a known base64 string.
+
+### In herdr
+
+Link, open the pane, and:
+
+1. With `editor = "vi"` in the config: `o` on a note opens vi at the line;
+   `:q` returns to the pane with the screen redrawn and keys working. Keys
+   typed in vi reach vi, not the pane.
+2. Edit and save in vi: the note updates in the pane.
+3. `y`, then paste in another pane: the path. `Y`: the wikilink.
+4. `/` and a word: results fill in while typing; `enter` on one opens the
+   note at that line.
 
 ## Step 5: tags, orphans, recent
 

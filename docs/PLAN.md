@@ -177,7 +177,7 @@ only.
 | `n` `N` | next and previous link in the note |
 | `[` `]`, `ctrl-o` | back and forward in note history (`ctrl-o` is back) |
 | `tab` `shift-tab` | cycle list mode |
-| `/` | search |
+| `/` | search; in the query line, `enter` or `esc` returns to the list |
 | `f` | fold or unfold the frontmatter table |
 | `g` | local graph |
 | `o` | open in editor |
@@ -216,15 +216,35 @@ Whole-vault graph is out of scope.
 
 ## Editing
 
-There is none. `o` suspends the TUI, runs the editor on the open note at the
-cursor's line (`+LINE`), and resumes when it exits. Editor choice: `editor` in
-config, then `$VISUAL`, then `$EDITOR`. Herdr panes inherit the server's
-environment, which may lack the shell's `$EDITOR`, so the config key is the
-reliable one. The watcher picks up the change and reindexes the file.
+There is none. `o` suspends the TUI, runs the editor on the open note, and
+resumes when it exits. The editor opens at the selected link's line, else
+at the top visible line. It runs with the root as its working directory.
+The watcher picks up the change and reindexes the file. `o` on anything
+other than a note says so on the status line.
+
+Editor choice: `editor` in config, then `$VISUAL`, then `$EDITOR`, then
+`vi`. Herdr panes inherit the herdr server's environment, which often has
+no `$EDITOR` even when the shell does, so the config key is the reliable
+way to choose.
 
 Copies go out as OSC 52, which herdr forwards to the client's clipboard,
-including over SSH. `y` copies the note's path. `Y` copies a `[[wikilink]]` to it: the shortest
-path that resolves uniquely.
+including over SSH. `y` copies the note's absolute path. `Y` copies a
+`[[wikilink]]` to it: the shortest path that resolves to it alone. On an
+unresolved link's page, both copy the target name.
+
+## Search
+
+`/` opens a query line at the bottom and switches the list to Search. The
+search runs as you type. Matching is literal text, case-insensitive unless
+the query has an uppercase letter. Results are `path:line` and the line,
+with the match highlighted, at most 500. `enter` or `esc` leaves the query
+line; `enter` on a result opens the note at that line.
+
+With `rg` on `PATH`, knapp runs it with `--no-ignore`, so `.gitignore`
+does not hide notes the tree shows, and prunes `exclude` folders. Every
+result is checked against the index, so files the tree does not show (dot
+folders, excludes, Obsidian's Excluded files) never appear. Without `rg`,
+knapp reads the notes itself.
 
 ## Agent handoff
 
@@ -282,7 +302,7 @@ outside herdr:
 ```toml
 exclude = ["node_modules/", "target/"]
 graph_hops = 2
-editor = ""           # empty: $VISUAL, then $EDITOR
+editor = ""           # empty: $VISUAL, then $EDITOR, then vi
 send_max_bytes = 65536
 
 [[root]]
@@ -436,6 +456,7 @@ src/
   graph.rs      local subgraph, layout, dot output, PNG frame
   herdr.rs      context json, pane open, agent prompt, graphics calls
   send.rs       allowlist enforcement, prompt fencing
+  search.rs     ripgrep and built-in full-text search
   tui/
 assets/
   font/         the embedded label font and its OFL license

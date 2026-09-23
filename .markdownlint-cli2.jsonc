@@ -3,6 +3,8 @@
     "default": true,
     // long lines are fine in prose and tables
     "MD013": false,
+    // each step in docs/IMPLEMENTATION.md has its own "Tests" section
+    "MD024": { "siblings_only": true },
     // inline HTML is used for badges
     "MD033": false,
     // the first line of a doc is not always an H1
