@@ -65,6 +65,20 @@ pub fn clean_selection(text: &str) -> (String, Option<String>) {
     }
 }
 
+/// Clipboard text worth peeking at: one line, a `[[wikilink]]` or a path to
+/// a `.md` file, with trailing punctuation from a loose selection dropped.
+/// Anything else (a paragraph, a password, a URL) is `None`.
+pub fn note_shaped(text: &str) -> Option<String> {
+    let t = text.trim();
+    if t.is_empty() || t.len() > 1024 || t.chars().any(char::is_control) {
+        return None;
+    }
+    let t = t.trim_end_matches(['.', ',', ';', ':', ')', '!', '?']);
+    let wikilink = t.starts_with("[[") || t.starts_with("![[");
+    let (target, _) = clean_selection(t);
+    (wikilink || target.to_lowercase().ends_with(".md")).then(|| t.to_string())
+}
+
 /// The root a peeked note is shown in: the configured root that contains
 /// it, else the nearest folder above it with `.obsidian/` or `.git/`, else
 /// its own folder.

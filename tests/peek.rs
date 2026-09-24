@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use common::temp_dir;
 use knapp::config::Root;
-use knapp::peek::{clean_selection, from_url, root_for};
+use knapp::peek::{clean_selection, from_url, note_shaped, root_for};
 
 #[test]
 fn file_urls() {
@@ -37,6 +37,35 @@ fn selections() {
     for (input, (target, frag)) in cases {
         let (t, f) = clean_selection(input);
         assert_eq!((t.as_str(), f.as_deref()), (target, frag), "{input:?}");
+    }
+}
+
+#[test]
+fn clipboard_text_must_look_like_a_note() {
+    let yes = [
+        ("docs/PLAN.md", "docs/PLAN.md"),
+        ("  docs/PLAN.md#Graph \n", "docs/PLAN.md#Graph"),
+        ("docs/PLAN.md,", "docs/PLAN.md"),
+        ("(see a.MD).", "(see a.MD"),
+        ("[[alpha]]", "[[alpha]]"),
+        ("![[img.png]]", "![[img.png]]"),
+        ("`notes/a.md`", "`notes/a.md`"),
+        ("/Users/s/My Notes/a.md", "/Users/s/My Notes/a.md"),
+    ];
+    for (input, want) in yes {
+        assert_eq!(note_shaped(input).as_deref(), Some(want), "{input:?}");
+    }
+    let no = [
+        "",
+        "hunter2",
+        "https://example.com/a.md.html",
+        "line one a.md\nline two",
+        "a.md\tb.md",
+        "notes/a.txt",
+        &"x".repeat(1100),
+    ];
+    for input in no {
+        assert_eq!(note_shaped(input), None, "{input:?}");
     }
 }
 

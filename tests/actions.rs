@@ -218,6 +218,65 @@ fn peek_from_a_selected_wikilink_through_the_config() {
     );
 }
 
+/// A `PATH` whose clipboard readers (on every platform) print `text`.
+fn clipboard_path(fake: &Fake, text: &str) -> String {
+    let bin = fake.dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("clip.txt"), text).unwrap();
+    for reader in ["pbpaste", "wl-paste", "xclip", "xsel"] {
+        let script = format!("#!/bin/sh\ncat '{}/clip.txt'\n", bin.display());
+        std::fs::write(bin.join(reader), script).unwrap();
+        std::fs::set_permissions(
+            bin.join(reader),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    format!("{}:/usr/bin:/bin", bin.display())
+}
+
+#[test]
+fn peek_falls_back_to_a_note_shaped_clipboard() {
+    let work = temp_dir("actions-clip-work");
+    std::fs::create_dir_all(work.join("docs")).unwrap();
+    std::fs::write(work.join("docs/PLAN.md"), "# Plan\n").unwrap();
+
+    let fake = Fake::new("actions-clip", &work);
+    let path = clipboard_path(&fake, "docs/PLAN.md#Plan\n");
+    let out = fake.run(
+        "peek-selection",
+        ctx(serde_json::json!({})),
+        &[("PATH", &path)],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let open = fake.call("plugin", "pane").unwrap();
+    assert_eq!(
+        open[8],
+        format!("KNAPP_NOTE={}/docs/PLAN.md", work.display())
+    );
+    assert_eq!(open[10], "KNAPP_FRAGMENT=Plan");
+
+    // Text that is not a note is not used, or shown.
+    let fake = Fake::new("actions-clip-secret", &work);
+    let path = clipboard_path(&fake, "hunter2");
+    let out = fake.run(
+        "peek-selection",
+        ctx(serde_json::json!({})),
+        &[("PATH", &path)],
+    );
+    assert!(!out.status.success());
+    let open = fake.call("plugin", "pane").unwrap();
+    assert!(
+        open[8].starts_with("KNAPP_ERROR=nothing selected"),
+        "{open:?}"
+    );
+    assert!(!open.join(" ").contains("hunter2"));
+}
+
 #[test]
 fn failures_open_the_popup_with_the_reason() {
     let work = temp_dir("actions-fail-work");

@@ -59,6 +59,30 @@ pub fn base64(data: &[u8]) -> String {
     out
 }
 
+/// The system clipboard's text, from the first reader that runs:
+/// `pbpaste` on macOS; `wl-paste`, `xclip`, or `xsel` elsewhere.
+pub fn read_clipboard() -> Option<String> {
+    let readers: &[&[&str]] = if cfg!(target_os = "macos") {
+        &[&["pbpaste"]]
+    } else {
+        &[
+            &["wl-paste", "--no-newline"],
+            &["xclip", "-selection", "clipboard", "-o"],
+            &["xsel", "--clipboard", "--output"],
+        ]
+    };
+    readers.iter().find_map(|r| {
+        let out = std::process::Command::new(r[0])
+            .args(&r[1..])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        out.status.success().then_some(())?;
+        String::from_utf8(out.stdout).ok()
+    })
+}
+
 /// The OSC 52 sequence that sets the clipboard to `text`.
 pub fn osc52(text: &str) -> String {
     format!("\x1b]52;c;{}\x07", base64(text.as_bytes()))

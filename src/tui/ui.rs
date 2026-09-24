@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, Paragraph};
 use ratatui::Frame;
 
-use super::app::{App, Focus, Layer, LayerContent, Mode, HELP};
+use super::app::{App, Focus, Layer, LayerContent, Mode, HELP, PEEK_HELP};
 use crate::herdr::Placement;
 
 /// Below this width the list and the note are shown one at a time.
@@ -80,7 +80,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let hint = app.status.clone().unwrap_or_else(|| {
-        if app.narrow {
+        if app.peek {
+            "? keys  n link  enter follow  [ back  q close".into()
+        } else if app.narrow {
             "? keys  h l list/note  tab mode  q quit".into()
         } else {
             "? keys  tab mode  enter open  n link  [ back  q quit".into()
@@ -330,21 +332,22 @@ fn draw_picker(frame: &mut Frame, app: &App) {
 
 fn draw_help(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let key_width = HELP.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    let help = if app.peek { PEEK_HELP } else { HELP };
+    let key_width = help.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     let width = (key_width + 50).min(usize::from(area.width)) as u16;
     let roots_rows = if app.roots_help.is_empty() {
         0
     } else {
         app.roots_help.len() + 2
     };
-    let height = (HELP.len() + roots_rows + 2).min(usize::from(area.height)) as u16;
+    let height = (help.len() + roots_rows + 2).min(usize::from(area.height)) as u16;
     let r = Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + (area.height - height) / 2,
         width,
         height,
     };
-    let mut lines: Vec<Line> = HELP
+    let mut lines: Vec<Line> = help
         .iter()
         .map(|(k, what)| {
             Line::from(vec![

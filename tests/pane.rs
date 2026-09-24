@@ -712,3 +712,21 @@ fn peek_mode_shows_one_note_at_its_fragment() {
     p.key(KeyCode::Esc);
     assert!(p.app.quit);
 }
+
+#[test]
+fn peek_lists_only_its_own_keys() {
+    let mut p = Pane::new(&fixture("vault-basic"), 80, 24);
+    p.app.peek = true;
+    p.app.open_at("alpha.md", None);
+    let screen = p.screen();
+    assert!(
+        screen.contains("enter follow") && !screen.contains("tab"),
+        "{screen}"
+    );
+    let help = p.keys("?").join("\n");
+    assert!(help.contains("follow the selected link"), "{help}");
+    assert!(
+        !help.contains("list mode") && !help.contains("search"),
+        "{help}"
+    );
+}

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2 (2026-09-23)
+
+- `peek-selection` works after a mouse selection: Herdr drops the
+  selection at the key, so knapp reads the clipboard, and uses it when it
+  is one line naming a `.md` file or a `[[wikilink]]`.
+- The peek popup's footer and `?` help list only the keys it answers to.
+- README: plain-text paths are not Ctrl-clickable; the config example uses
+  `vim`.
+
 ## 0.1.1 (2026-09-23)
 
 - Below 80 columns, opening a note from the list shows it. Before, `enter`

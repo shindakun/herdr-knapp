@@ -63,6 +63,9 @@ graph. It never writes a note.
   makes refreshes loop. A thread that reads watcher batches owns the
   `Watch` and calls `next_batch()`. A closure that names only `watch.batches` drops the
   watcher and silently stops all events.
+- `peek-selection` reads the clipboard only when Herdr passes no
+  selection, uses it only when `peek::note_shaped` accepts it, and never
+  puts rejected clipboard text in a message.
 - A child process knapp reads from gets `stdin(Stdio::null())` and, for
   `rg`, an explicit path. `rg` with neither searches stdin when stdin is not
   a terminal, and hangs.

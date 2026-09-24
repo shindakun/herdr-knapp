@@ -1795,6 +1795,23 @@ pub const HELP: &[(&str, &str)] = &[
     ("q, ctrl-c", "quit"),
 ];
 
+/// The keys the peek popup answers to: one note, no list.
+pub const PEEK_HELP: &[(&str, &str)] = &[
+    ("j k, arrows", "scroll the note"),
+    ("ctrl-d ctrl-u, pgdn pgup", "half a page"),
+    ("home end", "top and bottom"),
+    ("n N", "next and previous link in the note"),
+    ("enter", "follow the selected link"),
+    ("[ ], ctrl-o", "back and forward in history"),
+    ("f", "fold or unfold frontmatter"),
+    ("o", "open the note in the editor"),
+    ("y Y", "copy the path, copy a [[wikilink]]"),
+    ("s S", "send to an agent, with backlinks; enter sends"),
+    ("g", "the note's local graph"),
+    ("?", "this help"),
+    ("q, esc, ctrl-c", "close"),
+];
+
 /// The largest whole unit of an age in seconds: `42s`, `5m`, `3h`, `2d`,
 /// `6w`, `14mo`, `2y`.
 pub fn age(secs: u64) -> String {

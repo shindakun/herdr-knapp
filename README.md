@@ -43,13 +43,23 @@ description = "peek note"
 `open` splits the notes pane beside the focused pane, on the workspace's
 notes; the same key focuses it, and pressed again, closes it.
 
-Ctrl-click a link to a `.md` file in any pane to peek at it in a popup,
-scrolled to its `#heading`. That works for programs that print file links
-as terminal hyperlinks: `rg --hyperlink-format=default`, GNU
-`ls --hyperlink` (`gls` on macOS), `fd --hyperlink`, `eza --hyperlink`. For
-any other text, select it in copy mode (a path, or a `[[wikilink]]`) and
-press the `peek-selection` key. A link that leads nowhere shows why in the
-popup.
+To peek at a note in a popup, select its path or a `[[wikilink]]` with the
+mouse and press the `peek-selection` key. The key reads the selection from
+the clipboard (Herdr's `copy_on_select`, on by default, puts it there),
+using it only when it is one line naming a `.md` file or a `[[wikilink]]`.
+A relative path resolves from the workspace's directory, and a
+`#heading` scrolls to it. Reading the clipboard needs `pbpaste` on macOS,
+or `wl-paste`, `xclip`, or `xsel` on Linux. Over SSH the clipboard is on
+the other machine; a selection made in copy mode (`prefix+[`, then `v`)
+reaches the key directly. A link that leads nowhere shows why in the popup.
+
+Ctrl-click opens a peek too, on a terminal hyperlink to a `.md` file.
+Herdr makes a file path clickable only when the program printed it as a
+hyperlink: `rg --hyperlink-format=default`, GNU `ls --hyperlink` (`gls` on
+macOS), `fd --hyperlink`, `eza --hyperlink`.
+
+The peek shows one note: `n` / `N` step through its links, `enter`
+follows one, `[` goes back, `?` lists the rest, and `q` or `esc` closes it.
 
 ## The pane
 
@@ -143,7 +153,7 @@ When Herdr runs knapp as a plugin, it reads
 
 ```toml
 exclude = ["node_modules/", "target/"]
-editor = "nvim"
+editor = "vim"
 
 [[root]]
 name = "notes"

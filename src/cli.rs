@@ -461,7 +461,7 @@ fn hostname() -> String {
 }
 
 fn peek_target() -> Result<crate::peek::Target, String> {
-    use crate::peek::{clean_selection, from_url, Target};
+    use crate::peek::{clean_selection, from_url, note_shaped, Target};
     let ctx = crate::herdr::Context::from_env().ok_or("peek needs herdr's context")?;
     if let Some(url) = ctx.clicked_url.as_deref() {
         let t = from_url(url, &hostname())?;
@@ -471,8 +471,15 @@ fn peek_target() -> Result<crate::peek::Target, String> {
             Err(format!("no note at {}", t.path.display()))
         };
     }
-    let text = ctx.selected_text.as_deref().unwrap_or("");
-    let (target, fragment) = clean_selection(text);
+    // Herdr drops a mouse selection at the first key, so the chord arrives
+    // without it; with copy_on_select the text is on the clipboard.
+    let text = ctx
+        .selected_text
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| crate::editor::read_clipboard().and_then(|c| note_shaped(&c)))
+        .ok_or("nothing selected, and the clipboard holds no note path or [[link]]")?;
+    let (target, fragment) = clean_selection(&text);
     if target.is_empty() {
         return Err("nothing selected".into());
     }

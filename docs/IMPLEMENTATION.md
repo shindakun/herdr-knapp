@@ -1150,6 +1150,7 @@ commands, so a new command goes in it too.
 | Context JSON fields | `workspace_id`, `workspace_label`, `workspace_cwd`, `worktree`, `tab_id`, `tab_label`, `focused_pane_id`, `focused_pane_cwd`, `focused_pane_agent`, `focused_pane_status`, `selected_text`, `invocation_source`, `correlation_id`, `clicked_url`, `link_handler_id` |
 | Working directory | the plugin root, for every command |
 | Link clicks | Ctrl-click; plain text yields only `http(s)` URLs, OSC 8 hyperlinks yield any URI |
+| Selections | a mouse selection is cleared by the next key outside copy mode, prefix included, so a keybinding's `selected_text` comes only from copy mode; `ui.copy_on_select` (default on) copies a mouse selection to the clipboard. Copy mode is `prefix+[`, `v` starts a selection |
 | Clipboard | OSC 52 from a pane is forwarded to the client clipboard, up to 192 KiB |
 | CLI output | JSON, `{"id": ..., "result": {...}}`; errors as JSON on stderr, exit 1 |
 | Socket | newline-delimited JSON requests and replies |

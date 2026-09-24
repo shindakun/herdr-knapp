@@ -454,7 +454,12 @@ no per-open arguments. The actions pass what the panes need:
   plugin root as its cwd so the lookup can find it.
 - `peek-selection` reads `clicked_url` from `HERDR_PLUGIN_CONTEXT_JSON` (a
   link click) or `selected_text` (a keybinding over a copy-mode selection;
-  only its first line). A `file://` URL is percent-decoded to a path and its
+  only its first line). Herdr drops a mouse selection at the next key,
+  prefix included, so a chord after a mouse selection arrives without
+  `selected_text`; then the clipboard, where `copy_on_select` put the
+  selection, is read (`pbpaste`; `wl-paste`, `xclip`, `xsel`) and used only
+  when it is one line naming a `.md` file or a `[[wikilink]]`. Clipboard
+  text that is not note-shaped is never shown. A `file://` URL is percent-decoded to a path and its
   `#fragment` kept; anything else resolves as a path or a wikilink target
   against the configured roots. It then runs `herdr plugin pane open
   --plugin shindakun.knapp --entrypoint peek --env KNAPP_NOTE=<path>` and,
@@ -475,8 +480,7 @@ emits `file://` hyperlinks to the terminal: `rg --hyperlink-format=default`,
 GNU `ls --hyperlink` (`gls` on macOS, whose own `ls` has no such option),
 `fd --hyperlink`, `eza --hyperlink`. Those URLs often carry the host name
 (`file://host/path`); knapp accepts an empty host, `localhost`, or this
-machine's name. For any other text, select it in copy mode and use a
-keybinding:
+machine's name. For any other text, select it and use a keybinding:
 
 ```toml
 [[keys.command]]
