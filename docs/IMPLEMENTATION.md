@@ -959,28 +959,84 @@ The screen cannot be captured from here, so the user looks:
 
 ## Step 8: actions, link handler, peek
 
-- `open-pane`: port herdr-rss `src/launch.rs` (`decide`: open, focus, or
-  close from `herdr pane list`), with the pane title `Knapp`. On `Open`, run
-  `plugin pane open` with `--env KNAPP_CWD=<workspace_cwd>` and no `--cwd`.
-  A knapp pane's entry in `pane list` has `label` set to the manifest title
-  (`Knapp`) and `cwd` set to the plugin root.
-- `peek-selection`: read `clicked_url`, else `selected_text`.
-  - A `file://` URL may carry a host (`ls --hyperlink` writes
-    `file://hostname/path`). Accept an empty host, `localhost`, or this
-    machine's hostname; refuse others. Percent-decode the path, and use a
-    `#fragment` as the heading to scroll to.
-  - Selected text: trim it, strip surrounding `[[ ]]`, quotes, or
-    backticks. Try it as an absolute path, then relative to
-    `workspace_cwd`, then as a wikilink target in each root in order. The
-    first unique match wins.
-- `peek`: renders `KNAPP_NOTE`. Keys: scroll, `n`, `N`, `enter` (follows
-  inside the popup), `ctrl-o`, `o`, and `q` / `esc` to close. No graphics.
-- Manifest: add the `peek` pane, the `open` and `peek-selection` actions, and
-  the link handler, exactly as in the plan. The README gets the keybinding
-  example.
-- Tests: `decide` against captured `pane list` JSON, URL decoding with and
-  without a host, selected-text cleanup, and a fake herdr that checks the
-  `plugin pane open` argv.
+No new dependencies.
+
+### open-pane (`knapp open-pane`)
+
+- Port herdr-rss `src/launch.rs`: `decide(pane_list_json, plugin_root,
+  focused_tab)` returns open, focus, or close for a pane in the focused
+  tab whose `label` is `Knapp` and whose `cwd` is the plugin root (a knapp
+  pane's `pane list` entry has both). Only `w…:p…` pane ids reach an argv.
+- Focus: `herdr pane focus <id>`; close: `herdr pane close <id>`; open:
+  `herdr plugin pane open --plugin shindakun.knapp --entrypoint notes
+  --target-pane <focused_pane_id> --env KNAPP_CWD=<dir>`, with `<dir>` from
+  `herdr::workspace_dir` (step 3). Without `--target-pane`, herdr opens in
+  whatever workspace has focus.
+
+### peek-selection (`knapp peek-selection`)
+
+- `target(context) -> Result<(PathBuf, Option<String>), String>`:
+  - `clicked_url`: `file://[host]/path[#fragment]`. Host empty,
+    `localhost`, or `hostname`'s answer; anything else is refused.
+    Percent-decode the path.
+  - `selected_text`: first line, trimmed, then surrounding `[[…]]`,
+    quotes, or backticks removed, and an `|alias` or `#fragment` split
+    off. An absolute path; else relative to the workspace directory; else a
+    wikilink target resolved from the root of each configured root in order
+    (the first root that resolves it wins); else not found.
+- Open: `plugin pane open --plugin shindakun.knapp --entrypoint peek --env
+  KNAPP_NOTE=<path>` plus `--env KNAPP_FRAGMENT=<fragment>` when there is
+  one. herdr's popup is modal: `ui_busy` when another is open.
+- Failures (no match, a refused host, `ui_busy`) go to
+  `herdr notification show knapp --body <reason>`, and the action exits 1
+  so herdr's log has it.
+
+### peek (`knapp peek`)
+
+- Root: the configured root containing `KNAPP_NOTE`, else the nearest
+  folder above it holding `.obsidian/` or `.git/`, else its folder.
+- An `App` in peek mode: detail only (no list, `tab` does nothing), opened
+  on the note and scrolled to `KNAPP_FRAGMENT` (heading or block). Keys:
+  scroll, `n`, `N`, `enter` (follows inside the popup), `[` `]`, `o`, `y`,
+  `Y`, `g`, and `q` / `esc` to close. `s` works; the popup still gets the
+  underlying pane's context. The popup has no `HERDR_PANE_ID`, so there
+  are no pane graphics: the graph is its tree and images are placeholders.
+
+### Manifest
+
+Add the `peek` pane, the `open` and `peek-selection` actions, and the link
+handler, as in the plan. The link handler pattern is
+`(?i)^file://[^?#]*\.md(#.*)?$`. The README gets both keybindings.
+
+### Tests
+
+- `tests/launch.rs`: `decide` on `pane list` JSON shaped like herdr 0.9.1's
+  (open with none, focus when unfocused, close when focused, a knapp pane
+  in another tab ignored, a malformed id refused).
+- `tests/peek.rs`: URL decoding with and without a host, `%20`, a
+  fragment, a foreign host refused; selected-text cleanup (`[[a|b]]`,
+  quotes, backticks, several lines); resolution order; the peek root rule
+  (a config root, `.obsidian/`, `.git/`, none).
+- A fake herdr (a shell script as `HERDR_BIN_PATH`) that logs argv and
+  answers `pane list` and `plugin pane open` (including `ui_busy`): the
+  open, focus, and close argv; the peek argv with and without a fragment;
+  a notification on each failure.
+- `tests/pane.rs`: peek mode draws no list, `tab` does nothing, and `esc`
+  quits.
+
+### In herdr
+
+Test panes open with `--target-pane` next to the session's own pane. The
+popup has no pane id, so `pane read` cannot see it; the user looks.
+
+1. `herdr plugin action invoke shindakun.knapp.open` three times from a
+   split: opens, focuses, closes.
+2. In a scratch shell pane, print an OSC 8 link to a note
+   (`printf '\e]8;;file:///tmp/…/a.md\e\\a.md\e]8;;\e\\\n'`) and
+   activate it with the socket method `pane.link.activate {pane_id,
+   viewport_row, col}` (not in the CLI): the peek popup opens on the note.
+3. With `#heading` on the URL: the popup opens at that heading.
+4. A link to a missing file: a notification, no popup.
 
 ## Step 9: multiple roots
 

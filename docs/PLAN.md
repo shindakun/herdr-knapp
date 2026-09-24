@@ -424,7 +424,7 @@ command = ["./target/release/knapp", "peek-selection"]
 [[link_handlers]]
 id = "note"
 title = "Open note"
-pattern = "^file://[^?#]+\\.md(#.*)?$"
+pattern = "(?i)^file://[^?#]*\\.md(#.*)?$"
 action = "peek-selection"
 ```
 
@@ -435,21 +435,33 @@ no per-open arguments. The actions pass what the panes need:
   `herdr pane list`, finds a pane whose label is the manifest title `Knapp`
   and whose cwd is the plugin root, and focuses it, or closes it if it is
   already focused. With none, it runs `herdr plugin pane open --plugin
-  shindakun.knapp --entrypoint notes --env KNAPP_CWD=<workspace_cwd>`. The
-  pane keeps the plugin root as its cwd so the lookup can find it.
+  shindakun.knapp --entrypoint notes --target-pane <focused pane>
+  --env KNAPP_CWD=<workspace directory>`, where the workspace directory is
+  found the way the pane finds it: the workspace agent's cwd, else
+  `workspace_cwd` outside herdr's plugin directory. The pane keeps the
+  plugin root as its cwd so the lookup can find it.
 - `peek-selection` reads `clicked_url` from `HERDR_PLUGIN_CONTEXT_JSON` (a
-  link click) or `selected_text` (a keybinding over a copy-mode selection).
-  A `file://` URL is percent-decoded to a path; anything else resolves as a
-  path or a wikilink target against the configured roots. It then runs
-  `herdr plugin pane open --plugin shindakun.knapp --entrypoint peek
-  --env KNAPP_NOTE=<path>`. `ui_busy` means another modal is open; the action
-  reports it and exits. A note outside every root still opens: it renders,
-  and its links resolve relative to its own directory, with no backlinks.
+  link click) or `selected_text` (a keybinding over a copy-mode selection;
+  only its first line). A `file://` URL is percent-decoded to a path and its
+  `#fragment` kept; anything else resolves as a path or a wikilink target
+  against the configured roots. It then runs `herdr plugin pane open
+  --plugin shindakun.knapp --entrypoint peek --env KNAPP_NOTE=<path>` and,
+  with a fragment, `--env KNAPP_FRAGMENT=<fragment>`.
+- When nothing resolves, or herdr answers `ui_busy` because another modal is
+  open, `peek-selection` says so with `herdr notification show knapp
+  --body <reason>` and exits.
+- The peek popup's root is the configured root that contains the note, else
+  the nearest folder above it with `.obsidian/` or `.git/`, else the note's
+  own folder. Links and backlinks work within that root.
 
 Herdr hands a link handler only `http(s)` URLs found in plain text and OSC 8
 hyperlinks. A `.md` path is Ctrl-clickable when the program printing it
-emits `file://` hyperlinks, as `ls --hyperlink` and `rg --hyperlink-format`
-do. For any other text, select it in copy mode and use a keybinding:
+emits `file://` hyperlinks to the terminal: `rg --hyperlink-format=default`,
+GNU `ls --hyperlink` (`gls` on macOS, whose own `ls` has no such option),
+`fd --hyperlink`, `eza --hyperlink`. Those URLs often carry the host name
+(`file://host/path`); knapp accepts an empty host, `localhost`, or this
+machine's name. For any other text, select it in copy mode and use a
+keybinding:
 
 ```toml
 [[keys.command]]
@@ -457,7 +469,16 @@ key = "prefix+n"
 type = "plugin_action"
 command = "shindakun.knapp.peek-selection"
 description = "peek note"
+
+[[keys.command]]
+key = "prefix+k"
+type = "plugin_action"
+command = "shindakun.knapp.open"
+description = "knapp"
 ```
+
+A manifest action's `contexts` only describe where it is meant to run;
+herdr does not filter on them.
 
 ## CLI
 
