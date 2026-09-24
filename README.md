@@ -59,7 +59,8 @@ Unresolved, Orphans, Recent, and Search. An ambiguous link's page shows
 every candidate and where each link to it goes. `enter`
 opens a note or follows the selected link, `n` / `N` step through links,
 `[` / `]` go back and forward, and `?` lists every key. Below 80 columns
-the pane shows one side at a time; `h` / `l` switch.
+the pane shows one side at a time; `h` / `l` switch, and opening a note
+switches to it.
 
 - `o` opens the note in your editor at the selected link's line, and the
   pane updates when you save. The editor is `editor` in the config, else

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 (2026-09-23)
+
+- Below 80 columns, opening a note from the list shows it. Before, `enter`
+  and clicks opened it behind the list.
+- Clicks no longer reach the panes while the help, the agent picker, or
+  the send line is open.
+
 ## 0.1.0 (2026-09-23)
 
 - `links`, `backlinks`, and `unresolved`: wikilinks, embeds, Markdown

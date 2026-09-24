@@ -1347,6 +1347,10 @@ impl App {
         self.scroll = 0;
         self.selected_hit = None;
         self.jump = jump;
+        // A narrow pane shows one side: show the page that just opened.
+        if self.narrow {
+            self.focus = Focus::Detail;
+        }
         if self.mode != Mode::Tree {
             self.rows = None;
             self.list.select(Some(0));
@@ -1688,6 +1692,10 @@ impl App {
     }
 
     pub fn mouse(&mut self, m: MouseEvent) {
+        // Help, the agent picker, and the send line cover the panes.
+        if self.help || self.picker.is_some() || self.draft.is_some() {
+            return;
+        }
         let at = |r: Rect| {
             m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
         };

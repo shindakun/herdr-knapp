@@ -137,7 +137,8 @@ Targets for 5,000 notes: a cold load under 2 seconds, a warm load under
 
 One pane, a list on the left and a detail panel on the right. `tab` cycles
 the left list between modes. Below 80 columns the pane shows one of the two
-at a time, and `h` / `l` switch between them. The pane starts with no note
+at a time, `h` / `l` switch between them, and opening a note switches to
+it. The pane starts with no note
 open; the detail panel shows the root's counts until one is.
 
 | Mode | Shows |
@@ -206,7 +207,8 @@ only.
 | `q`, `ctrl-c` | quit |
 
 `ctrl-i` is not used: terminals send it as `tab`. The mouse wheel scrolls the
-panel under the pointer. A click selects a list row or follows a link.
+panel under the pointer. A click selects a list row or follows a link. While the help, a picker, or
+the send line is open, the mouse does nothing.
 
 Following an ambiguous link opens its pick. Following an unresolved link
 shows the target name and the notes that reference it.

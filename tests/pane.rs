@@ -9,7 +9,9 @@ use knapp::render::Theme;
 use knapp::tui::app::{App, Mode, Page};
 use knapp::tui::ui;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::Terminal;
 
 fn app_for(root: &Path) -> App {
@@ -60,6 +62,17 @@ impl Pane {
     fn key(&mut self, code: KeyCode) -> Vec<String> {
         self.app.key(KeyEvent::new(code, KeyModifiers::NONE));
         self.draw()
+    }
+
+    /// A left click at zero-based `col`, `row`.
+    fn click(&mut self, col: u16, row: u16) -> String {
+        self.app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+        self.screen()
     }
 
     fn screen(&mut self) -> String {
@@ -162,6 +175,34 @@ fn narrow_shows_one_panel_at_a_time() {
         screen.contains("4 notes") && !screen.contains("dir/"),
         "{screen}"
     );
+}
+
+#[test]
+fn narrow_opening_a_note_shows_it() {
+    let mut p = Pane::new(&fixture("vault-basic"), 60, 20);
+    let screen = p.keys("j\n").join("\n");
+    assert!(
+        screen.contains("# Alpha") && !screen.contains("dir/"),
+        "{screen}"
+    );
+
+    let mut p = Pane::new(&fixture("vault-basic"), 60, 20);
+    let screen = p.click(2, 2);
+    assert!(
+        screen.contains("# Alpha") && !screen.contains("dir/"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn clicks_do_nothing_under_help() {
+    let mut p = Pane::new(&fixture("vault-basic"), 100, 24);
+    p.keys("?");
+    p.click(2, 2);
+    assert_eq!(p.app.page(), &Page::Summary);
+    p.key(KeyCode::Esc);
+    p.click(2, 2);
+    assert_eq!(p.app.page(), &Page::Note("alpha.md".into()));
 }
 
 #[test]
