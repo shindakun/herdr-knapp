@@ -35,6 +35,8 @@ graph. It never writes a note.
   `scripts/expected.py`, which ports Obsidian's link resolution.
 - `docs/PLAN.md` is the design and the build order; `docs/IMPLEMENTATION.md`
   is how each step is built and tested. `herdr-plugin.toml` is the manifest.
+- `skills/knapp/SKILL.md` is the agent skill for the CLI; keep its command
+  table in step with `knapp help`.
 
 ## Rules
 
@@ -56,8 +58,10 @@ graph. It never writes a note.
   path, and request, because herdr pastes text unchanged inside
   `ESC[200~ … ESC[201~` and an `ESC[201~` in a note ends the paste. The
   fence tag is checked against the cleaned text, never the raw text.
-- A thread that reads watcher batches owns the `Watch` and calls
-  `next_batch()`. A closure that names only `watch.batches` drops the
+- The watcher ignores access events (open, read, close without writing):
+  on Linux inotify reports every folder a refresh opens, and counting them
+  makes refreshes loop. A thread that reads watcher batches owns the
+  `Watch` and calls `next_batch()`. A closure that names only `watch.batches` drops the
   watcher and silently stops all events.
 - A child process knapp reads from gets `stdin(Stdio::null())` and, for
   `rg`, an explicit path. `rg` with neither searches stdin when stdin is not

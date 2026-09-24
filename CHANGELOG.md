@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-09-23)
 
 - `links`, `backlinks`, and `unresolved`: wikilinks, embeds, Markdown
   links, and frontmatter links, resolved the way Obsidian 1.14 resolves
@@ -29,3 +29,4 @@
   through `rg` when available.
 - Parse cache per root, reused when a file's mtime and size match. `index`
   command with `--stats`, `--rebuild`, and `--watch`.
+- An agent skill, `skills/knapp`, for the read-only commands.

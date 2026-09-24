@@ -5,12 +5,6 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: every step of `docs/PLAN.md` is built: the link index, its cache
-and watcher, the CLI, the notes pane with editing, search, tags,
-unresolved links, orphans, recent notes, sending notes to an agent, the
-local graph, PNG images, several roots, and the herdr actions and link
-handler. Version 0.1.0 is not released yet.
-
 ## Install
 
 ```sh
@@ -130,6 +124,12 @@ relative to their note first, as in a docs repo.
 The root is `--root`, a configured root that contains FILE or the current
 directory, or else the current directory.
 
+An agent can use these commands through the skill in `skills/knapp`:
+
+```sh
+npx skills add shindakun/herdr-knapp --skill knapp -g
+```
+
 Parsed notes are cached in `~/.cache/knapp/index/` (or
 `$XDG_CACHE_HOME/knapp/index/`), one file per root, so later runs only
 parse what changed. Deleting the cache is always safe.
@@ -168,8 +168,9 @@ make hooks   # install the pre-commit hooks
 
 `make audit` needs `cargo-audit`; `make md-lint` needs `markdownlint-cli2`;
 `make expected` and `make expected-check` need `python3`.
-`scripts/release.sh X.Y.Z` cuts a release from a `## X.Y.Z (` section in
-`CHANGELOG.md`.
+`scripts/release.sh X.Y.Z` cuts a release from a dated
+`## X.Y.Z (YYYY-MM-DD)` section in `CHANGELOG.md`; it needs `main` in sync
+with `origin` and `gh` logged in.
 
 ## License
 

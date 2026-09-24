@@ -309,7 +309,9 @@ starts.
 
 - A thread receives events and keeps the touched rel paths, dropping any
   with a component starting with `.` and any inside the cache directory
-  (which may sit under the root).
+  (which may sit under the root). Access events are dropped too, except a
+  close after writing: on Linux, notify watches `IN_OPEN`, so every folder
+  a refresh opens would otherwise start the next refresh.
 - It sends a batch after 150 ms without events, or 1 s after the first
   event of a continuous stream.
 - `Index::refresh` runs the sweep again, reparses the touched notes plus any
@@ -349,7 +351,9 @@ starts.
   directory each fall back to parsing; rewriting a file with the same size
   within the same second is seen (the two-second rule); deleting a file
   drops it; `--rebuild` parses everything.
-- `tests/watch.rs`: in a temp copy of `vault-basic`, start the watcher, then
+- `tests/watch.rs`: reading notes and folders (and refreshing, which opens
+  every folder) produces no batch; on Linux this fails without the access
+  filter. In a temp copy of `vault-basic`, start the watcher, then
   create, edit, rename, and delete notes, and wait (up to 5 s each) for the
   `Change` and the resulting state flip. In a temp copy, moving `alpha.md`
   to `x/alpha.md` keeps `[[alpha]]` resolved, and adding `y/alpha.md` makes
@@ -1118,6 +1122,24 @@ fallbacks shorten the name but keep the number. `?` lists the slots.
 
 With two configured roots, `2` and `1` switch, each keeps its open note,
 and editing a file in the inactive root shows when switching back.
+
+## Releasing
+
+1. Date the version's section in `CHANGELOG.md`:
+   `## X.Y.Z (YYYY-MM-DD)`. `release.sh` refuses an undated heading and
+   takes the notes up to the next `##` heading or the end of the file.
+2. Push `main` and let CI pass; `release.sh` requires `main` in sync with
+   `origin`.
+3. `scripts/release.sh X.Y.Z`: checks, version bump in `Cargo.toml`,
+   `Cargo.lock`, and `herdr-plugin.toml`, commit, tag `vX.Y.Z`, push, and
+   a GitHub release with the changelog section.
+4. On a clean herdr: `herdr plugin install shindakun/herdr-knapp`, bind
+   the keys from the README, open the pane, peek a link, and send a note
+   from a `send_allow` root.
+
+The marketplace lists only public repositories with the `herdr-plugin`
+topic. `skills/knapp/SKILL.md` is the agent skill; it names the read-only
+commands, so a new command goes in it too.
 
 ## Herdr 0.9.1 reference
 

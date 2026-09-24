@@ -146,3 +146,22 @@ fn a_watch_moved_into_a_thread_keeps_watching() {
     }
     std::fs::remove_dir_all(root).ok();
 }
+
+/// Reading the tree is not a change. inotify reports opens, and a refresh
+/// opens every folder, so counting reads would make each refresh start the
+/// next one.
+#[test]
+fn reading_notes_and_folders_makes_no_batch() {
+    let root = temp_copy("vault-basic", "watch-reads");
+    let (w, mut index) = start(&root, None);
+    for _ in 0..3 {
+        index.refresh(&BTreeSet::new()).expect("refresh");
+        for entry in std::fs::read_dir(root.join("dir")).unwrap() {
+            let _ = std::fs::read_to_string(entry.unwrap().path());
+        }
+        let _ = std::fs::read_to_string(root.join("index.md"));
+    }
+    let batches = batches_for(&w, Duration::from_millis(800));
+    assert!(batches.is_empty(), "reads made a batch: {batches:?}");
+    std::fs::remove_dir_all(root).ok();
+}

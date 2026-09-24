@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use notify::event::{AccessKind, AccessMode, EventKind};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 const QUIET: Duration = Duration::from_millis(150);
@@ -80,6 +81,15 @@ fn add(
         // have changed; the sweep will find out.
         return true;
     };
+    // inotify reports opens and reads (notify watches IN_OPEN), and the
+    // sweep opens every folder: counting those would make each refresh
+    // trigger the next. A close after writing is a change; other access is
+    // not.
+    if let EventKind::Access(kind) = event.kind {
+        if kind != AccessKind::Close(AccessMode::Write) {
+            return false;
+        }
+    }
     let mut any = false;
     for path in event.paths {
         if let Some(rel) = relevant(root, ignore_dir, &path) {
