@@ -15,6 +15,10 @@ pub struct Context {
     pub workspace_id: Option<String>,
     pub workspace_cwd: Option<String>,
     pub focused_pane_id: Option<String>,
+    #[serde(default)]
+    pub selected_text: Option<String>,
+    #[serde(default)]
+    pub clicked_url: Option<String>,
 }
 
 impl Context {
@@ -94,6 +98,55 @@ pub fn error_message(stderr: &str) -> String {
 /// starts with `-`, and `--` would break it.
 pub fn prompt(pane: &str, text: &str) -> Result<(), String> {
     herdr(&["agent", "prompt", pane, text]).map(drop)
+}
+
+pub fn pane_list() -> Result<String, String> {
+    herdr(&["pane", "list"])
+}
+
+/// Focuses one of this plugin's panes. (`herdr pane focus` moves by
+/// direction; it takes no pane id.)
+pub fn pane_focus(id: &str) -> Result<(), String> {
+    herdr(&["plugin", "pane", "focus", id]).map(drop)
+}
+
+pub fn pane_close(id: &str) -> Result<(), String> {
+    herdr(&["plugin", "pane", "close", id]).map(drop)
+}
+
+/// `herdr plugin pane open` for one of knapp's panes, with `--env` pairs.
+pub fn open_pane(
+    entrypoint: &str,
+    beside: Option<&str>,
+    env: &[(&str, &str)],
+) -> Result<(), String> {
+    let plugin = var("HERDR_PLUGIN_ID").unwrap_or_else(|| "shindakun.knapp".into());
+    let mut args: Vec<String> = vec![
+        "plugin".into(),
+        "pane".into(),
+        "open".into(),
+        "--plugin".into(),
+        plugin,
+        "--entrypoint".into(),
+        entrypoint.into(),
+    ];
+    if let Some(p) = beside {
+        args.extend([
+            "--target-pane".into(),
+            p.into(),
+            "--direction".into(),
+            "right".into(),
+        ]);
+    }
+    for (k, v) in env {
+        args.extend(["--env".into(), format!("{k}={v}")]);
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    herdr(&refs).map(drop)
+}
+
+pub fn notify(title: &str, body: &str) -> Result<(), String> {
+    herdr(&["notification", "show", title, "--body", body]).map(drop)
 }
 
 pub fn agents() -> Result<Vec<Agent>, String> {

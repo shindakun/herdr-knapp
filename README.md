@@ -5,15 +5,56 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 to 7 of `docs/PLAN.md` are built: the link index, its
-cache and watcher, the CLI, and the notes pane with editing, search, tags,
+Status: steps 1 to 8 of `docs/PLAN.md` are built: the link index, its
+cache and watcher, the CLI, the notes pane with editing, search, tags,
 unresolved links, orphans, recent notes, sending notes to an agent, the
-local graph, and PNG images in notes. The `open` action and its
-keybinding come in a later step; until then, open the pane with:
+local graph, and PNG images, and the herdr actions and link handler.
+
+## Install
 
 ```sh
-herdr plugin pane open --plugin shindakun.knapp --entrypoint notes
+herdr plugin install shindakun/herdr-knapp
 ```
+
+Needs `cargo`; the install step builds the binary. Linux and macOS.
+
+To work on it, link a checkout instead:
+
+```sh
+cargo build --release
+herdr plugin link /path/to/herdr-knapp
+```
+
+## Open it
+
+Bind the actions in `~/.config/herdr/config.toml`, then
+`herdr server reload-config`. These keys are free in herdr's defaults;
+`prefix+?` lists what is taken in yours:
+
+```toml
+[[keys.command]]
+key = "prefix+m"
+type = "plugin_action"
+command = "shindakun.knapp.open"
+description = "knapp"
+
+[[keys.command]]
+key = "prefix+shift+m"
+type = "plugin_action"
+command = "shindakun.knapp.peek-selection"
+description = "peek note"
+```
+
+`open` splits the notes pane beside the focused pane, on the workspace's
+notes; the same key focuses it, and pressed again, closes it.
+
+Ctrl-click a link to a `.md` file in any pane to peek at it in a popup,
+scrolled to its `#heading`. That works for programs that print file links
+as terminal hyperlinks: `rg --hyperlink-format=default`, GNU
+`ls --hyperlink` (`gls` on macOS), `fd --hyperlink`, `eza --hyperlink`. For
+any other text, select it in copy mode (a path, or a `[[wikilink]]`) and
+press the `peek-selection` key. A link that leads nowhere shows why in the
+popup.
 
 ## The pane
 
@@ -111,21 +152,6 @@ send_allow = ["shared/"]
 Top-level keys go before the first `[[root]]`. Files and folders whose
 names start with `.` are always skipped. In an Obsidian vault, the
 Excluded files setting applies too.
-
-## Install
-
-```sh
-herdr plugin install shindakun/herdr-knapp
-```
-
-Needs `cargo`; the install step builds the binary. Linux and macOS.
-
-To work on it, link a checkout instead:
-
-```sh
-cargo build --release
-herdr plugin link /path/to/herdr-knapp
-```
 
 ## Development
 

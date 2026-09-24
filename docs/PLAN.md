@@ -434,7 +434,9 @@ no per-open arguments. The actions pass what the panes need:
 - `open-pane` toggles the pane in the focused tab. It reads
   `herdr pane list`, finds a pane whose label is the manifest title `Knapp`
   and whose cwd is the plugin root, and focuses it, or closes it if it is
-  already focused. With none, it runs `herdr plugin pane open --plugin
+  already focused (`herdr plugin pane focus` / `close`; `herdr pane focus`
+  moves by direction and takes no id). Opening focuses the new pane, so the
+  same key opens and closes it. With none, it runs `herdr plugin pane open --plugin
   shindakun.knapp --entrypoint notes --target-pane <focused pane>
   --env KNAPP_CWD=<workspace directory>`, where the workspace directory is
   found the way the pane finds it: the workspace agent's cwd, else
@@ -447,9 +449,12 @@ no per-open arguments. The actions pass what the panes need:
   against the configured roots. It then runs `herdr plugin pane open
   --plugin shindakun.knapp --entrypoint peek --env KNAPP_NOTE=<path>` and,
   with a fragment, `--env KNAPP_FRAGMENT=<fragment>`.
-- When nothing resolves, or herdr answers `ui_busy` because another modal is
-  open, `peek-selection` says so with `herdr notification show knapp
-  --body <reason>` and exits.
+- When nothing resolves (no such note, a link to another machine),
+  `peek-selection` opens the popup with the reason instead of a note; `q`
+  closes it. Herdr suppresses notifications for the active tab, which is
+  where every click comes from, so a notification (`herdr notification show
+  knapp --body <reason>`) is used only when the popup cannot open because
+  another modal is up (`ui_busy`).
 - The peek popup's root is the configured root that contains the note, else
   the nearest folder above it with `.obsidian/` or `.git/`, else the note's
   own folder. Links and backlinks work within that root.
@@ -465,13 +470,13 @@ keybinding:
 
 ```toml
 [[keys.command]]
-key = "prefix+n"
+key = "prefix+shift+m"
 type = "plugin_action"
 command = "shindakun.knapp.peek-selection"
 description = "peek note"
 
 [[keys.command]]
-key = "prefix+k"
+key = "prefix+m"
 type = "plugin_action"
 command = "shindakun.knapp.open"
 description = "knapp"
@@ -576,5 +581,5 @@ file.
 7. Graph: `knapp graph`, the tree, then the canvas through pane graphics.
    PNG embeds in the detail panel, as a second change. Built.
 8. `open-pane`, `peek-selection`, the link handler, and the peek popup, with
-   their manifest entries.
+   their manifest entries. Built.
 9. Multiple roots.

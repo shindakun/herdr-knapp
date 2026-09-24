@@ -24,7 +24,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_header(frame, app, header);
 
     app.narrow = body.width < NARROW;
-    let (list_area, detail_area) = if app.narrow {
+    let (list_area, detail_area) = if app.peek {
+        (Rect::default(), body)
+    } else if app.narrow {
         match app.focus {
             Focus::List => (body, Rect::default()),
             Focus::Detail => (Rect::default(), body),

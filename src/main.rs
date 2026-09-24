@@ -13,6 +13,9 @@ fn main() -> ExitCode {
         Some("graph") => cli::graph(&args[1..]),
         Some("index") => cli::index(&args[1..]),
         Some("pane") => cli::pane(&args[1..]),
+        Some("peek") => cli::peek(&args[1..]),
+        Some("open-pane") => cli::open_pane(&args[1..]),
+        Some("peek-selection") => cli::peek_selection(&args[1..]),
         None | Some("--help" | "-h" | "help") => {
             println!("{USAGE}");
             Ok(())

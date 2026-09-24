@@ -13,3 +13,29 @@ id = "notes"
 title = "Knapp"
 placement = "split"
 command = ["./target/release/knapp", "pane"]
+
+[[panes]]
+id = "peek"
+title = "Note"
+placement = "popup"
+width = "80%"
+height = "70%"
+command = ["./target/release/knapp", "peek"]
+
+[[actions]]
+id = "open"
+title = "Browse notes"
+contexts = ["workspace"]
+command = ["./target/release/knapp", "open-pane"]
+
+[[actions]]
+id = "peek-selection"
+title = "Peek note"
+contexts = ["selection"]
+command = ["./target/release/knapp", "peek-selection"]
+
+[[link_handlers]]
+id = "note"
+title = "Open note"
+pattern = "(?i)^file://[^?#]*\\.md(#.*)?$"
+action = "peek-selection"

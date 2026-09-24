@@ -48,6 +48,7 @@ fn skips_plugin_checkouts_and_prefers_the_agent() {
         workspace_id: Some("w1".into()),
         workspace_cwd: Some(checkout.display().to_string()),
         focused_pane_id: Some("w1:p3".into()),
+        ..Context::default()
     };
     let project_s = project.display().to_string();
     let list = agents(&project_s, &project_s);

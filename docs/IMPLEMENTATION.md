@@ -967,7 +967,8 @@ No new dependencies.
   focused_tab)` returns open, focus, or close for a pane in the focused
   tab whose `label` is `Knapp` and whose `cwd` is the plugin root (a knapp
   pane's `pane list` entry has both). Only `w…:p…` pane ids reach an argv.
-- Focus: `herdr pane focus <id>`; close: `herdr pane close <id>`; open:
+- Focus: `herdr plugin pane focus <id>`; close: `herdr plugin pane close
+  <id>` (`herdr pane focus` takes a direction, not an id); open:
   `herdr plugin pane open --plugin shindakun.knapp --entrypoint notes
   --target-pane <focused_pane_id> --env KNAPP_CWD=<dir>`, with `<dir>` from
   `herdr::workspace_dir` (step 3). Without `--target-pane`, herdr opens in
@@ -987,9 +988,12 @@ No new dependencies.
 - Open: `plugin pane open --plugin shindakun.knapp --entrypoint peek --env
   KNAPP_NOTE=<path>` plus `--env KNAPP_FRAGMENT=<fragment>` when there is
   one. herdr's popup is modal: `ui_busy` when another is open.
-- Failures (no match, a refused host, `ui_busy`) go to
-  `herdr notification show knapp --body <reason>`, and the action exits 1
-  so herdr's log has it.
+- Failures (no match, a refused host) open the peek popup with
+  `KNAPP_ERROR=<reason>`, which `knapp peek` shows until `q` or `esc`
+  (`tui::show_message`). Herdr suppresses notifications for the active tab,
+  so `herdr notification show knapp --body <reason>` is only the fallback
+  for `ui_busy`, when the popup cannot open. The action exits 1 either
+  way, so herdr's log has the reason.
 
 ### peek (`knapp peek`)
 
@@ -1017,10 +1021,12 @@ handler, as in the plan. The link handler pattern is
   fragment, a foreign host refused; selected-text cleanup (`[[a|b]]`,
   quotes, backticks, several lines); resolution order; the peek root rule
   (a config root, `.obsidian/`, `.git/`, none).
-- A fake herdr (a shell script as `HERDR_BIN_PATH`) that logs argv and
-  answers `pane list` and `plugin pane open` (including `ui_busy`): the
-  open, focus, and close argv; the peek argv with and without a fragment;
-  a notification on each failure.
+- `tests/actions.rs`: the real binary with a fake herdr (a shell script as
+  `HERDR_BIN_PATH`) that logs argv and answers `pane list`, `agent list`,
+  and `plugin pane open` (including `ui_busy`): the focus and open argv;
+  the peek argv from a clicked URL with a fragment and from a selected
+  wikilink resolved through the config; the error popup for a missing note
+  and a foreign host; a notification only for `ui_busy`.
 - `tests/pane.rs`: peek mode draws no list, `tab` does nothing, and `esc`
   quits.
 
@@ -1036,7 +1042,10 @@ popup has no pane id, so `pane read` cannot see it; the user looks.
    activate it with the socket method `pane.link.activate {pane_id,
    viewport_row, col}` (not in the CLI): the peek popup opens on the note.
 3. With `#heading` on the URL: the popup opens at that heading.
-4. A link to a missing file: a notification, no popup.
+4. A link to a missing file: the popup shows the reason, and `q` closes it.
+
+For step 3, the note needs text below the heading: a heading near the end
+of a short note cannot scroll to the top, and the popup shows the end.
 
 ## Step 9: multiple roots
 

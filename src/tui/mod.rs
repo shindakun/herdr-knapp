@@ -91,6 +91,43 @@ pub fn run(root_arg: Option<&str>) -> Result<(), String> {
     result
 }
 
+/// `knapp peek`: one note in herdr's popup, from the root `peek::root_for`
+/// picks, scrolled to `fragment`.
+pub fn run_peek(note: &Path, fragment: Option<&str>) -> Result<(), String> {
+    let loaded = (|| -> Result<Loaded, String> {
+        let config = Config::load()?;
+        let note = std::fs::canonicalize(note).map_err(|e| format!("{}: {e}", note.display()))?;
+        let roots = config.roots(Path::new("/"));
+        let path = crate::peek::root_for(&note, &roots);
+        let root = roots
+            .into_iter()
+            .find(|r| config::canonical(&r.path) == path)
+            .unwrap_or(config::Root {
+                name: None,
+                path: path.clone(),
+                send_allow: Vec::new(),
+            });
+        let mut loaded = load_root(&config, root)?;
+        let rel = note
+            .strip_prefix(&loaded.app.index.root)
+            .map_err(|_| format!("{} is outside {}", note.display(), path.display()))?
+            .to_string_lossy()
+            .into_owned();
+        loaded.app.peek = true;
+        loaded.app.open_at(&rel, fragment);
+        Ok(loaded)
+    })();
+    let mut terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    let result = match loaded {
+        Ok(loaded) => event_loop(&mut terminal, loaded),
+        Err(e) => show_error(&mut terminal, &e),
+    };
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    ratatui::restore();
+    result
+}
+
 fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
     let config = Config::load()?;
     let root = match base_dir()? {
@@ -108,6 +145,10 @@ fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
             }
         }
     };
+    load_root(&config, root)
+}
+
+fn load_root(config: &Config, root: config::Root) -> Result<Loaded, String> {
     let canonical = config::canonical(&root.path);
     let cache = config::cache_dir().map(|d| index::cache_path(&d, &canonical));
     let (index, stats) = Index::load(&root.path, &config.exclude, cache.as_deref())?;
@@ -137,7 +178,7 @@ fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
         app,
         cache,
         editor,
-        exclude: config.exclude,
+        exclude: config.exclude.clone(),
     })
 }
 
@@ -472,6 +513,15 @@ fn run_editor(
         Ok(s) => Err(format!("{} exited with {s}", argv[0])),
         Err(e) => Err(format!("{}: {e}", argv[0])),
     }
+}
+
+/// A message in its own screen, until `q` or `esc`: the peek popup's way of
+/// saying a clicked link led nowhere.
+pub fn show_message(message: &str) -> Result<(), String> {
+    let mut terminal = ratatui::init();
+    let result = show_error(&mut terminal, message);
+    ratatui::restore();
+    result
 }
 
 /// A root that fails to load: say why, and wait for `q`.

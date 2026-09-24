@@ -651,3 +651,23 @@ fn a_png_over_8_mb_keeps_the_placeholder() {
     assert!(p.screen().contains("[image:\u{a0}img.png]"));
     std::fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn peek_mode_shows_one_note_at_its_fragment() {
+    let mut p = Pane::new(&fixture("vault-basic"), 80, 6);
+    p.app.peek = true;
+    p.app.open_at("alpha.md", Some("Second Section"));
+    let rows = p.draw();
+    // No list: the note starts at the left edge, after the panel's border.
+    assert!(rows[1].starts_with("│ alpha.md"), "{rows:?}");
+    assert!(rows[2].contains("## Second Section"), "{rows:?}");
+    // tab does nothing; [ has no summary page to go back to.
+    p.keys("\t[");
+    assert_eq!(p.app.mode, Mode::Tree);
+    assert_eq!(p.app.page(), &Page::Note("alpha.md".into()));
+    // Links still work inside the popup.
+    p.keys("n\n");
+    assert_eq!(p.app.page(), &Page::Note("index.md".into()));
+    p.key(KeyCode::Esc);
+    assert!(p.app.quit);
+}

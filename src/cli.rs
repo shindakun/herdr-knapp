@@ -20,6 +20,9 @@ commands:
   graph FILE [--root NAME|PATH] [--hops N] [--dot]
                                           the local graph as a tree, or Graphviz
   pane [--root NAME|PATH]                 browse the notes in a terminal pane
+  peek                                    the note in KNAPP_NOTE (herdr popup)
+  open-pane                               herdr action: open, focus, or close the pane
+  peek-selection                          herdr action: peek at a clicked or selected note
   index [--root NAME|PATH] [--rebuild] [--stats] [--watch]
                                           load the root and write the cache
   help                                    show this message
@@ -393,4 +396,129 @@ pub fn graph(args: &[String]) -> Result<(), String> {
         print!("{out}");
     }
     Ok(())
+}
+
+/// `open-pane` (the `open` action): open, focus, or close the notes pane in
+/// the focused tab.
+pub fn open_pane(_args: &[String]) -> Result<(), String> {
+    use crate::launch::{decide, Decision};
+    let root = std::env::var("HERDR_PLUGIN_ROOT")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::current_dir())
+        .map_err(|e| format!("plugin root: {e}"))?;
+    match decide(&crate::herdr::pane_list()?, &root)? {
+        Decision::Focus(id) => crate::herdr::pane_focus(&id),
+        Decision::Close(id) => crate::herdr::pane_close(&id),
+        Decision::Open { beside } => {
+            let ctx = crate::herdr::Context::from_env().unwrap_or_default();
+            let agents = crate::herdr::agents().unwrap_or_default();
+            let dir = crate::herdr::workspace_dir(&ctx, &agents);
+            let dir = dir.map(|d| d.display().to_string());
+            let env: Vec<(&str, &str)> = dir
+                .as_deref()
+                .map(|d| ("KNAPP_CWD", d))
+                .into_iter()
+                .collect();
+            crate::herdr::open_pane("notes", Some(&beside), &env)
+        }
+    }
+}
+
+/// `peek-selection` (the link handler's action, and a keybinding over a
+/// selection): open the peek popup on the clicked or selected note.
+/// Actions have no screen, so a failure opens the popup with the reason.
+/// herdr suppresses notifications for the active tab, which is where every
+/// click comes from, so a notification is only the fallback when the popup
+/// itself cannot open (`ui_busy`).
+pub fn peek_selection(_args: &[String]) -> Result<(), String> {
+    let result = match peek_target() {
+        Ok(t) => {
+            let path = t.path.display().to_string();
+            let mut env = vec![("KNAPP_NOTE", path.as_str())];
+            if let Some(f) = &t.fragment {
+                env.push(("KNAPP_FRAGMENT", f.as_str()));
+            }
+            crate::herdr::open_pane("peek", None, &env)
+        }
+        Err(reason) => {
+            let shown = crate::herdr::open_pane("peek", None, &[("KNAPP_ERROR", reason.as_str())]);
+            Err(shown.err().unwrap_or(reason))
+        }
+    };
+    if let Err(e) = &result {
+        if e.starts_with("ui_busy") {
+            let _ = crate::herdr::notify("knapp", e);
+        }
+    }
+    result
+}
+
+fn hostname() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+fn peek_target() -> Result<crate::peek::Target, String> {
+    use crate::peek::{clean_selection, from_url, Target};
+    let ctx = crate::herdr::Context::from_env().ok_or("peek needs herdr's context")?;
+    if let Some(url) = ctx.clicked_url.as_deref() {
+        let t = from_url(url, &hostname())?;
+        return if t.path.is_file() {
+            Ok(t)
+        } else {
+            Err(format!("no note at {}", t.path.display()))
+        };
+    }
+    let text = ctx.selected_text.as_deref().unwrap_or("");
+    let (target, fragment) = clean_selection(text);
+    if target.is_empty() {
+        return Err("nothing selected".into());
+    }
+    let agents = crate::herdr::agents().unwrap_or_default();
+    let base = crate::herdr::workspace_dir(&ctx, &agents);
+    let found = |path: PathBuf| Target {
+        path,
+        fragment: fragment.clone(),
+    };
+    let as_path = Path::new(&target);
+    if as_path.is_absolute() && as_path.is_file() {
+        return Ok(found(as_path.to_path_buf()));
+    }
+    if let Some(b) = &base {
+        for candidate in [b.join(&target), b.join(format!("{target}.md"))] {
+            if candidate.is_file() {
+                return Ok(found(candidate));
+            }
+        }
+    }
+    // A wikilink target, resolved from the top of each configured root.
+    let config = Config::load()?;
+    let cache_dir = config::cache_dir();
+    for root in config.roots(base.as_deref().unwrap_or(Path::new("/"))) {
+        let canonical = config::canonical(&root.path);
+        let cache = cache_dir
+            .as_deref()
+            .map(|d| index::cache_path(d, &canonical));
+        let Ok((idx, _)) = Index::load(&root.path, &config.exclude, cache.as_deref()) else {
+            continue;
+        };
+        if let [id] = idx.wikilink_from(&target, "")[..] {
+            return Ok(found(idx.root.join(&idx.files[id].rel)));
+        }
+    }
+    Err(format!("no note named {target}"))
+}
+
+/// `peek` (the popup): the note in `KNAPP_NOTE`, at `KNAPP_FRAGMENT`.
+pub fn peek(_args: &[String]) -> Result<(), String> {
+    if let Some(reason) = std::env::var("KNAPP_ERROR").ok().filter(|r| !r.is_empty()) {
+        return crate::tui::show_message(&reason);
+    }
+    let note = std::env::var("KNAPP_NOTE").map_err(|_| "KNAPP_NOTE is not set")?;
+    let fragment = std::env::var("KNAPP_FRAGMENT")
+        .ok()
+        .filter(|f| !f.is_empty());
+    crate::tui::run_peek(Path::new(&note), fragment.as_deref())
 }

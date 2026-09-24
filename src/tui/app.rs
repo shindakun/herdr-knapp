@@ -251,6 +251,8 @@ pub struct App {
     pending_send: Option<Vec<String>>,
     pub picker: Option<Picker>,
     pub draft: Option<Draft>,
+    /// The peek popup: one note, no list; `esc` closes.
+    pub peek: bool,
 }
 
 impl App {
@@ -296,6 +298,7 @@ impl App {
             pending_send: None,
             picker: None,
             draft: None,
+            peek: false,
         };
         app.build_tree();
         app
@@ -1388,6 +1391,26 @@ impl App {
         }
     }
 
+    /// Opens a note scrolled to a `#heading` or `#^block` fragment. The first
+    /// page opened replaces the start page, so history begins at the note.
+    pub fn open_at(&mut self, rel: &str, fragment: Option<&str>) {
+        let Some(id) = self.index.id(rel) else {
+            self.status = Some(format!("not found: {rel}"));
+            return;
+        };
+        let line = fragment.and_then(|f| match block_fragment(f) {
+            Some(block) => self.block_line(rel, block),
+            None => self.index.heading_line(id, f, false),
+        });
+        let fresh = self.history.len() == 1 && self.history[0].page == Page::Summary;
+        self.open_rel(rel, line.or(Some(1)), None);
+        if fresh {
+            self.history.remove(0);
+            self.cursor = 0;
+        }
+        self.focus = Focus::Detail;
+    }
+
     pub fn open_rel(&mut self, rel: &str, line: Option<u32>, link: Option<usize>) {
         let Some(id) = self.index.id(rel) else {
             self.status = Some(format!("not found: {rel}"));
@@ -1562,6 +1585,23 @@ impl App {
             return;
         }
         let half = (self.detail_height() / 2).max(1) as isize;
+        if self.peek {
+            match k.code {
+                KeyCode::Esc => {
+                    self.quit = true;
+                    return;
+                }
+                KeyCode::Tab
+                | KeyCode::BackTab
+                | KeyCode::Char('h')
+                | KeyCode::Char('l')
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Char('/') => return,
+                _ => {}
+            }
+            self.focus = Focus::Detail;
+        }
         match k.code {
             KeyCode::Char('c') if ctrl => self.quit = true,
             KeyCode::Char('d') if ctrl => self.move_by(half),

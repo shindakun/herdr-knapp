@@ -21,6 +21,9 @@ graph. It never writes a note.
 - `src/herdr.rs` reads the environment Herdr injects and calls the Herdr CLI.
 - `src/editor.rs` picks and runs the editor and encodes OSC 52 copies;
   `src/search.rs` is full-text search through `rg` or built in.
+- `src/launch.rs` decides open, focus, or close for the `open` action;
+  `src/peek.rs` turns a clicked URL or a selection into a note and picks
+  the peek popup's root.
 - `src/send.rs` is the send allowlist.
 - `src/tui/` is the notes pane and the peek popup.
 - `tests/common/` has the temp-copy helpers; copies get old mtimes so the
