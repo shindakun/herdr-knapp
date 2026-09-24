@@ -1049,11 +1049,73 @@ of a short note cannot scroll to the top, and the popup shows the end.
 
 ## Step 9: multiple roots
 
-- One `Index` per root, loaded when first switched to. The watcher follows
-  the active root only; switching back runs the stat sweep.
-- `1`..`9` follow config order. `--root` takes a name or a path.
-- Tests: two fixture roots in one config, switching and per-root send
-  fences.
+No new dependencies.
+
+### Session (tui/session.rs)
+
+The event loop holds a `Session` instead of one `App`:
+
+```rust
+pub struct Session {
+    slots: Vec<Slot>,          // slot 0: the unconfigured start root, if any; 1..: config order
+    active: usize,
+}
+struct Slot { root: Root, app: Option<App> }   // `app` loads on first switch
+
+impl Session {
+    pub fn active(&mut self) -> &mut App;
+    pub fn switch(&mut self, n: usize, load: impl FnOnce(&Root) -> Result<App, String>) -> Result<bool, String>;
+    pub fn app_mut(&mut self, slot: usize) -> Option<&mut App>;
+}
+```
+
+- Slots: configured roots are `1..=N` in config order (at most 9 get a
+  key). The start root is the configured one that contains the workspace
+  directory, or else slot `0`, the workspace directory itself. With no
+  slot 0, key `0` does nothing.
+- `App` handles `0`..`9` by pushing `Effect::SwitchRoot(n)`; peek mode and
+  open query or send lines ignore digits as switches (the lines take them
+  as text).
+- Switching keeps the old `App` whole (its index, history, list, folds,
+  search, scroll). A new slot's `App` is loaded through the same
+  `load_root` the pane starts with; a load failure sets the status line
+  and stays on the current root.
+- The new `App` gets the current `cell_px` and the loop's settings.
+
+### Events carry their slot
+
+Everything that comes back later is tagged with the slot that asked:
+`AppEvent::Batch(slot, …)`, `Results(slot, generation, …)`,
+`Agents(slot, …)`, `Sent(slot, …)`. The loop routes each to
+`session.app_mut(slot)`, so a switch never delivers one root's search
+results, agent list, or refresh to another (generations are per `App`
+and can collide across roots).
+
+### Watchers
+
+One watcher per loaded slot, started when the slot first loads, each
+sending `Batch(slot, …)`. An inactive root keeps refreshing, so switching
+back shows it current. The cache for every loaded slot is written on quit.
+
+### Header
+
+With more than one slot, the root label is `<n> <name>`; the narrow
+fallbacks shorten the name but keep the number. `?` lists the slots.
+
+### Tests
+
+- `tests/session.rs`: slot numbering with and without a slot 0; `switch`
+  loads once and keeps state (open a note in root 1, switch to 2 and back:
+  the note and history are still there); a failing load leaves the active
+  root; `app_mut` routing.
+- `tests/pane.rs`: digits push `SwitchRoot`; the query and send lines take
+  digits as text; peek ignores them; the header shows `2 notes`.
+- A send from root 2 is checked against root 2's `send_allow`.
+
+### In herdr
+
+With two configured roots, `2` and `1` switch, each keeps its open note,
+and editing a file in the inactive root shows when switching back.
 
 ## Herdr 0.9.1 reference
 
@@ -1068,4 +1130,9 @@ of a short note cannot scroll to the top, and the popup shows the end.
 | CLI output | JSON, `{"id": ..., "result": {...}}`; errors as JSON on stderr, exit 1 |
 | Socket | newline-delimited JSON requests and replies |
 | Graphics | socket only; `png`, `rgb`, `rgba`, `bgra`; 16 layers per pane; `feature_disabled` when `terminal.kitty_graphics = false` |
-| Popup | one at a time; `ui_busy` while another modal is open |
+| Popup | one at a time; `ui_busy` while another modal is open; `popup.close {}` on the socket closes it |
+| Plugin panes | `plugin pane open` without `--target-pane` opens in the focused workspace; a split needs `--target-pane`. `plugin pane focus <id>` / `close <id>`; `pane focus` takes a direction, not an id. A plugin pane's `pane list` entry has `label` = the manifest title and `cwd` = the plugin root |
+| Notifications | suppressed for the active tab, though `notification show` answers `shown: true` |
+| Links | the socket method `pane.link.activate {pane_id, viewport_row, col}` clicks the link at a cell; the reply says whether a plugin handled it. Handlers are tried in plugin-id order |
+| Agent prompt | pastes text unchanged inside `ESC[200~ … ESC[201~` (macOS, Linux) and submits; the argv parser takes the second argument as text even when it starts with `-`, and `--` breaks it |
+| Workspace directory | `workspace_cwd` is the focused pane's cwd, which may be another plugin's checkout |

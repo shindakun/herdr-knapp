@@ -200,7 +200,7 @@ only.
 | `o` | open in editor |
 | `y` `Y` | copy path, copy `[[wikilink]]` |
 | `s` `S` | send to an agent, send with backlinks; type a request, `enter` sends, `esc` cancels |
-| `1`..`9` | switch root |
+| `1`..`9`, `0` | switch root (`0`: the workspace directory when not configured) |
 | `?` | show the keys |
 | `esc` | close the help or a picker; focus the list |
 | `q`, `ctrl-c` | quit |
@@ -366,8 +366,16 @@ send_allow = ["docs/", "README.md"]
 
 Top-level keys come before the first `[[root]]`; TOML assigns anything after
 it to that root. A relative `path` resolves against `workspace_cwd` from
-`HERDR_PLUGIN_CONTEXT_JSON`, or the process cwd outside herdr. Several roots:
-`1`..`9` switches between them. A root with no `send_allow` cannot send.
+`HERDR_PLUGIN_CONTEXT_JSON`, or the process cwd outside herdr. A root with
+no `send_allow` cannot send.
+
+Several roots: `1`..`9` switch to the configured roots in config order.
+When the pane opened on a workspace directory that no configured root
+contains, that directory is root `0`. The header shows the current root's
+number and name (`2 notes`). Each root keeps its own place: open note,
+history, list mode, folds, and search. A root's index loads the first time
+it is shown, and its watcher keeps running after you switch away, so every
+root visited stays current. The peek popup does not switch roots.
 
 With no config file there is one root, the workspace directory (the current
 directory outside herdr), and sending is off.
@@ -582,4 +590,4 @@ file.
    PNG embeds in the detail panel, as a second change. Built.
 8. `open-pane`, `peek-selection`, the link handler, and the peek popup, with
    their manifest entries. Built.
-9. Multiple roots.
+9. Multiple roots: `0`..`9`, per-root state, a watcher per visited root.
