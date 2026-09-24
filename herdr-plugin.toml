@@ -1,6 +1,6 @@
 id = "shindakun.knapp"
 name = "Knapp"
-version = "0.1.1"
+version = "0.1.2"
 min_herdr_version = "0.9.0"
 description = "Browse a tree of Markdown notes and its links"
 platforms = ["linux", "macos"]
