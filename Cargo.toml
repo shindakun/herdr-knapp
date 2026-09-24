@@ -1,6 +1,6 @@
 [package]
 name = "knapp"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Herdr plugin that browses a tree of Markdown notes by its links: backlinks, unresolved links, orphans, and the local graph"
 license = "MIT"
