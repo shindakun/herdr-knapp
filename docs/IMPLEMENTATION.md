@@ -1080,7 +1080,9 @@ impl Session {
   search, scroll). A new slot's `App` is loaded through the same
   `load_root` the pane starts with; a load failure sets the status line
   and stays on the current root.
-- The new `App` gets the current `cell_px` and the loop's settings.
+- The root switched to takes the current `cell_px`, loaded or not: the
+  cell size follows the terminal, and a root loaded before a resize would
+  otherwise lay out images at the old size.
 
 ### Events carry their slot
 

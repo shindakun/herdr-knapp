@@ -1,6 +1,7 @@
 //! The notes pane and the peek popup.
 
 pub mod app;
+pub mod session;
 pub mod ui;
 
 use std::collections::HashMap;
@@ -26,13 +27,19 @@ use crate::render::Theme;
 use crate::scan::Kind;
 use crate::search::{self, Match};
 use app::{App, Effect};
+use session::Session;
 
+/// Events from threads carry the session slot that asked.
 enum AppEvent {
     Term(Event),
-    Batch(std::collections::BTreeSet<String>),
-    Results(u64, Vec<Match>),
-    Agents(Result<Vec<crate::herdr::Agent>, String>, Option<String>),
-    Sent(Result<String, String>),
+    Batch(usize, std::collections::BTreeSet<String>),
+    Results(usize, u64, Vec<Match>),
+    Agents(
+        usize,
+        Result<Vec<crate::herdr::Agent>, String>,
+        Option<String>,
+    ),
+    Sent(usize, Result<String, String>),
 }
 
 /// `HERDR_PLUGIN_STATE_DIR/last-agent`: the pane id last sent to.
@@ -74,16 +81,14 @@ fn base_dir() -> Result<Option<PathBuf>, String> {
 struct Loaded {
     app: App,
     cache: Option<PathBuf>,
-    editor: String,
-    exclude: Vec<String>,
 }
 
 pub fn run(root_arg: Option<&str>) -> Result<(), String> {
-    let loaded = load(root_arg);
+    let started = start(root_arg);
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
-    let result = match loaded {
-        Ok(loaded) => event_loop(&mut terminal, loaded),
+    let result = match started {
+        Ok((config, session)) => event_loop(&mut terminal, config, session),
         Err(e) => show_error(&mut terminal, &e),
     };
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
@@ -94,7 +99,7 @@ pub fn run(root_arg: Option<&str>) -> Result<(), String> {
 /// `knapp peek`: one note in herdr's popup, from the root `peek::root_for`
 /// picks, scrolled to `fragment`.
 pub fn run_peek(note: &Path, fragment: Option<&str>) -> Result<(), String> {
-    let loaded = (|| -> Result<Loaded, String> {
+    let started = (|| -> Result<(Config, Session), String> {
         let config = Config::load()?;
         let note = std::fs::canonicalize(note).map_err(|e| format!("{}: {e}", note.display()))?;
         let roots = config.roots(Path::new("/"));
@@ -107,7 +112,7 @@ pub fn run_peek(note: &Path, fragment: Option<&str>) -> Result<(), String> {
                 path: path.clone(),
                 send_allow: Vec::new(),
             });
-        let mut loaded = load_root(&config, root)?;
+        let mut loaded = load_root(&config, root.clone())?;
         let rel = note
             .strip_prefix(&loaded.app.index.root)
             .map_err(|_| format!("{} is outside {}", note.display(), path.display()))?
@@ -115,12 +120,15 @@ pub fn run_peek(note: &Path, fragment: Option<&str>) -> Result<(), String> {
             .into_owned();
         loaded.app.peek = true;
         loaded.app.open_at(&rel, fragment);
-        Ok(loaded)
+        Ok((
+            config,
+            Session::new(Vec::new(), root, loaded.app, loaded.cache),
+        ))
     })();
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
-    let result = match loaded {
-        Ok(loaded) => event_loop(&mut terminal, loaded),
+    let result = match started {
+        Ok((config, session)) => event_loop(&mut terminal, config, session),
         Err(e) => show_error(&mut terminal, &e),
     };
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
@@ -128,10 +136,13 @@ pub fn run_peek(note: &Path, fragment: Option<&str>) -> Result<(), String> {
     result
 }
 
-fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
+/// The config, and a session opened on the start root with every
+/// configured root in its slots.
+fn start(root_arg: Option<&str>) -> Result<(Config, Session), String> {
     let config = Config::load()?;
-    let root = match base_dir()? {
-        Some(base) => config.pick_root(root_arg, &base, &base)?,
+    let base = base_dir()?;
+    let root = match &base {
+        Some(base) => config.pick_root(root_arg, base, base)?,
         None => {
             let first = config.roots(Path::new("/")).into_iter().next();
             match (root_arg, first) {
@@ -145,7 +156,10 @@ fn load(root_arg: Option<&str>) -> Result<Loaded, String> {
             }
         }
     };
-    load_root(&config, root)
+    let loaded = load_root(&config, root.clone())?;
+    let configured = config.roots(base.as_deref().unwrap_or(Path::new("/")));
+    let session = Session::new(configured, root, loaded.app, loaded.cache);
+    Ok((config, session))
 }
 
 fn load_root(config: &Config, root: config::Root) -> Result<Loaded, String> {
@@ -165,21 +179,11 @@ fn load_root(config: &Config, root: config::Root) -> Result<Loaded, String> {
     let theme = Theme {
         color: var("NO_COLOR").is_none(),
     };
-    let editor = crate::editor::choose(
-        &config.editor,
-        var("VISUAL").as_deref(),
-        var("EDITOR").as_deref(),
-    );
     let mut app = App::new(index, label, root.send_allow, theme);
     app.status = status;
     app.send_max_bytes = config.send_max_bytes;
     app.graph_hops = config.graph_hops;
-    Ok(Loaded {
-        app,
-        cache,
-        editor,
-        exclude: config.exclude.clone(),
-    })
+    Ok(Loaded { app, cache })
 }
 
 /// The input thread polls so it can stop reading the terminal while the
@@ -231,40 +235,62 @@ impl Input {
     }
 }
 
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result<(), String> {
-    let Loaded {
-        mut app,
-        cache,
-        editor,
-        exclude,
-    } = loaded;
+/// Watches a slot's root; its batches come back tagged with the slot.
+fn spawn_watch(
+    slot: usize,
+    root: &Path,
+    cache: Option<&Path>,
+    tx: &mpsc::Sender<AppEvent>,
+) -> Result<(), String> {
+    let ignore = cache.and_then(Path::parent);
+    let watch = crate::watch::watch(root, ignore)?;
+    let tx = tx.clone();
+    thread::spawn(move || {
+        while let Some(batch) = watch.next_batch() {
+            if tx.send(AppEvent::Batch(slot, batch)).is_err() {
+                return;
+            }
+        }
+    });
+    Ok(())
+}
+
+fn event_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    config: Config,
+    mut session: Session,
+) -> Result<(), String> {
+    let editor = crate::editor::choose(
+        &config.editor,
+        var("VISUAL").as_deref(),
+        var("EDITOR").as_deref(),
+    );
     let (tx, rx) = mpsc::channel();
     let input = Input::spawn(tx.clone());
-    let ignore = cache.as_deref().and_then(|c| c.parent()).map(PathBuf::from);
-    match crate::watch::watch(&app.index.root, ignore.as_deref()) {
-        Ok(watch) => {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                while let Some(batch) = watch.next_batch() {
-                    if tx.send(AppEvent::Batch(batch)).is_err() {
-                        return;
-                    }
-                }
-            });
-        }
-        Err(e) => app.status = Some(format!("not watching for changes: {e}")),
-    }
     let rg = search::find_rg();
     let graphics = crate::herdr::Graphics::from_env();
     let mut sync = Sync::default();
-    query_graphics(&graphics, &mut app);
     let mut search_cancel: Option<Arc<AtomicBool>> = None;
 
+    let first = session.active;
+    let cache = session.slots[first].cache.clone();
+    let root = session.active().index.root.clone();
+    if let Err(e) = spawn_watch(first, &root, cache.as_deref(), &tx) {
+        session.active().status = Some(format!("not watching for changes: {e}"));
+    }
+    if session.slots.len() > 1 {
+        let listing = session.listing();
+        session.active().roots_help = listing;
+    }
+    query_graphics(&graphics, session.active());
+
     loop {
+        let slot = session.active;
         terminal
-            .draw(|f| ui::draw(f, &mut app))
+            .draw(|f| ui::draw(f, session.active()))
             .map_err(|e| format!("draw: {e}"))?;
         if let Some(g) = &graphics {
+            let app = session.active();
             if let Err(e) = sync.apply(g, &app.layers, app.cell_px) {
                 // feature_disabled and the like: no images for this session.
                 app.set_cell_px(None);
@@ -274,24 +300,63 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
         let Ok(ev) = rx.recv() else {
             break;
         };
+        // Replies go to the slot that asked, even after a switch.
         match ev {
-            AppEvent::Term(Event::Key(k)) => app.key(k),
-            AppEvent::Term(Event::Mouse(m)) => app.mouse(m),
-            AppEvent::Term(Event::Resize(..)) => query_graphics(&graphics, &mut app),
+            AppEvent::Term(Event::Key(k)) => session.active().key(k),
+            AppEvent::Term(Event::Mouse(m)) => session.active().mouse(m),
+            AppEvent::Term(Event::Resize(..)) => query_graphics(&graphics, session.active()),
             AppEvent::Term(_) => {}
-            AppEvent::Batch(b) => app.batch(&b),
-            AppEvent::Results(generation, batch) => app.results(generation, batch),
-            AppEvent::Agents(result, last) => app.agents(result, last),
-            AppEvent::Sent(result) => app.sent(result),
+            AppEvent::Batch(s, b) => {
+                if let Some(app) = session.app_mut(s) {
+                    app.batch(&b);
+                }
+            }
+            AppEvent::Results(s, generation, batch) => {
+                if let Some(app) = session.app_mut(s) {
+                    app.results(generation, batch);
+                }
+            }
+            AppEvent::Agents(s, result, last) => {
+                if let Some(app) = session.app_mut(s) {
+                    app.agents(result, last);
+                }
+            }
+            AppEvent::Sent(s, result) => {
+                if let Some(app) = session.app_mut(s) {
+                    app.sent(result);
+                }
+            }
         }
-        for effect in app.take_effects() {
+        let effects = session.active().take_effects();
+        for effect in effects {
             match effect {
+                Effect::SwitchRoot(key) => {
+                    let switched = session.switch(key, |root| {
+                        load_root(&config, root.clone()).map(|l| (l.app, l.cache))
+                    });
+                    match switched {
+                        Ok(true) => {
+                            let now = session.active;
+                            let cache = session.slots[now].cache.clone();
+                            let root = session.active().index.root.clone();
+                            if let Err(e) = spawn_watch(now, &root, cache.as_deref(), &tx) {
+                                session.active().status =
+                                    Some(format!("not watching for changes: {e}"));
+                            }
+                            let listing = session.listing();
+                            session.active().roots_help = listing;
+                        }
+                        Ok(false) => {}
+                        Err(e) => session.active().status = Some(e),
+                    }
+                }
                 Effect::Edit { path, line } => {
+                    let root = session.active().index.root.clone();
                     input.pause();
-                    let result = run_editor(terminal, &editor, &path, line, &app.index.root);
+                    let result = run_editor(terminal, &editor, &path, line, &root);
                     input.resume();
                     if let Err(e) = result {
-                        app.status = Some(format!("editor: {e}"));
+                        session.active().status = Some(format!("editor: {e}"));
                     }
                 }
                 Effect::ListAgents => {
@@ -300,7 +365,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
                         let last = last_agent_path()
                             .and_then(|p| std::fs::read_to_string(p).ok())
                             .map(|s| s.trim().to_string());
-                        let _ = tx.send(AppEvent::Agents(workspace_agents(), last));
+                        let _ = tx.send(AppEvent::Agents(slot, workspace_agents(), last));
                     });
                 }
                 Effect::Send { pane, agent, text } => {
@@ -312,7 +377,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
                             }
                             agent
                         });
-                        let _ = tx.send(AppEvent::Sent(result));
+                        let _ = tx.send(AppEvent::Sent(slot, result));
                     });
                 }
                 Effect::Copy(text) => {
@@ -326,6 +391,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
                     }
                     let cancel = Arc::new(AtomicBool::new(false));
                     search_cancel = Some(cancel.clone());
+                    let app = session.active();
                     let notes: Vec<String> = app
                         .index
                         .files
@@ -335,7 +401,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
                         .collect();
                     let (root, exclude, rg, tx) = (
                         app.index.root.clone(),
-                        exclude.clone(),
+                        config.exclude.clone(),
                         rg.clone(),
                         tx.clone(),
                     );
@@ -356,6 +422,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
                                     last = Instant::now();
                                     return tx
                                         .send(AppEvent::Results(
+                                            slot,
                                             generation,
                                             std::mem::take(&mut batch),
                                         ))
@@ -365,21 +432,23 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, loaded: Loaded) -> Result
                             },
                         );
                         if !batch.is_empty() {
-                            let _ = tx.send(AppEvent::Results(generation, batch));
+                            let _ = tx.send(AppEvent::Results(slot, generation, batch));
                         }
                     });
                 }
             }
         }
-        if app.quit {
+        if session.active().quit {
             break;
         }
     }
     if let Some(g) = &graphics {
         let _ = sync.apply(g, &[], None);
     }
-    if let Some(c) = &cache {
-        let _ = app.index.save_cache(c);
+    for s in &session.slots {
+        if let (Some(app), Some(cache)) = (&s.app, &s.cache) {
+            let _ = app.index.save_cache(cache);
+        }
     }
     Ok(())
 }

@@ -591,3 +591,4 @@ file.
 8. `open-pane`, `peek-selection`, the link handler, and the peek popup, with
    their manifest entries. Built.
 9. Multiple roots: `0`..`9`, per-root state, a watcher per visited root.
+   Built.

@@ -10,6 +10,8 @@
 - Notes pane: tree, rendered note, backlinks, and forward links, with link
   following, history, a folded frontmatter table, mouse, and a narrow
   layout. It updates as files change.
+- Several roots: `1`..`9` switch between configured roots, each keeping its
+  place and staying current.
 - `open` action to open, focus, or close the notes pane; Ctrl-click on a
   `file://` link to a note, or `peek-selection` over selected text, opens
   it in a popup at its `#heading`.

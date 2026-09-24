@@ -25,7 +25,9 @@ graph. It never writes a note.
   `src/peek.rs` turns a clicked URL or a selection into a note and picks
   the peek popup's root.
 - `src/send.rs` is the send allowlist.
-- `src/tui/` is the notes pane and the peek popup.
+- `src/tui/` is the notes pane and the peek popup: `app.rs` the state and
+  keys, `ui.rs` the drawing, `session.rs` one `App` per root, and `mod.rs`
+  the event loop, which routes replies by the slot that asked.
 - `tests/common/` has the temp-copy helpers; copies get old mtimes so the
   cache's two-second rule does not force reparsing.
 - `fixtures/` are note trees the tests index; `fixtures/README.md` says what

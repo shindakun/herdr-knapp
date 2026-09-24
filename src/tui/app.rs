@@ -40,6 +40,8 @@ pub enum Effect {
         agent: String,
         text: String,
     },
+    /// Show the root with this key (`0`..`9`).
+    SwitchRoot(u8),
 }
 
 /// Choosing among several agents before a send.
@@ -253,6 +255,8 @@ pub struct App {
     pub draft: Option<Draft>,
     /// The peek popup: one note, no list; `esc` closes.
     pub peek: bool,
+    /// `key  name` per root, for the help; empty with a single root.
+    pub roots_help: Vec<String>,
 }
 
 impl App {
@@ -299,6 +303,7 @@ impl App {
             picker: None,
             draft: None,
             peek: false,
+            roots_help: Vec::new(),
         };
         app.build_tree();
         app
@@ -1644,6 +1649,9 @@ impl App {
             KeyCode::Char('o') => self.edit(),
             KeyCode::Char('y') => self.copy(false),
             KeyCode::Char('Y') => self.copy(true),
+            KeyCode::Char(c @ '0'..='9') if !self.peek => {
+                self.effects.push(Effect::SwitchRoot(c as u8 - b'0'));
+            }
             KeyCode::Char('g') => match self.page().clone() {
                 Page::Note(rel) => self.navigate(Page::Graph(rel), None),
                 Page::Graph(_) => {}

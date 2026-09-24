@@ -332,14 +332,19 @@ fn draw_help(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let key_width = HELP.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     let width = (key_width + 50).min(usize::from(area.width)) as u16;
-    let height = (HELP.len() + 2).min(usize::from(area.height)) as u16;
+    let roots_rows = if app.roots_help.is_empty() {
+        0
+    } else {
+        app.roots_help.len() + 2
+    };
+    let height = (HELP.len() + roots_rows + 2).min(usize::from(area.height)) as u16;
     let r = Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + (area.height - height) / 2,
         width,
         height,
     };
-    let lines: Vec<Line> = HELP
+    let mut lines: Vec<Line> = HELP
         .iter()
         .map(|(k, what)| {
             Line::from(vec![
@@ -351,6 +356,13 @@ fn draw_help(frame: &mut Frame, app: &App) {
             ])
         })
         .collect();
+    if !app.roots_help.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(" roots", app.theme.dim())));
+        for r in &app.roots_help {
+            lines.push(Line::from(format!(" {r}")));
+        }
+    }
     frame.render_widget(Clear, r);
     frame.render_widget(
         Paragraph::new(lines).block(

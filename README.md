@@ -5,10 +5,11 @@ its links. Browse the tree, follow `[[wikilinks]]`, see what links back, find
 unresolved links and orphans, and look at the local graph. Works on an
 Obsidian vault, a repo's `docs/`, or any directory of `.md` files.
 
-Status: steps 1 to 8 of `docs/PLAN.md` are built: the link index, its
-cache and watcher, the CLI, the notes pane with editing, search, tags,
+Status: every step of `docs/PLAN.md` is built: the link index, its cache
+and watcher, the CLI, the notes pane with editing, search, tags,
 unresolved links, orphans, recent notes, sending notes to an agent, the
-local graph, and PNG images, and the herdr actions and link handler.
+local graph, PNG images, several roots, and the herdr actions and link
+handler. Version 0.1.0 is not released yet.
 
 ## Install
 
@@ -152,6 +153,11 @@ send_allow = ["shared/"]
 Top-level keys go before the first `[[root]]`. Files and folders whose
 names start with `.` are always skipped. In an Obsidian vault, the
 Excluded files setting applies too.
+
+With several roots, `1`..`9` in the pane switch to them in config order;
+`0` is the workspace directory when no configured root contains it. Each
+root keeps its open note and place, and stays current while you look at
+another. `?` lists them.
 
 ## Development
 
